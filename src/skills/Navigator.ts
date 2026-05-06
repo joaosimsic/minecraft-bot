@@ -54,9 +54,9 @@ export class Navigator {
 
   private isGoalReachable(target: Vec3, moves: Movements): boolean {
     const botPos = this.pbot.entity.position;
-    const botGoal = new goals.GoalNear(botPos.x, botPos.y, botPos.z, 1);
+    const targetGoal = new goals.GoalNear(target.x, target.y, target.z, 1);
 
-    const iter = this.pbot.pathfinder.getPathFromTo(moves, target, botGoal, {
+    const iter = this.pbot.pathfinder.getPathFromTo(moves, botPos, targetGoal, {
       timeout: 3000,
     });
 
@@ -82,13 +82,32 @@ export class Navigator {
       const step = await this.stepToward(target, range);
 
       if (step === 'reached') return true;
+      if (step === 'nopath') return false;
 
       attempts++;
+
+      if (attempts >= MAX_ATTEMPTS) break;
+
+      await this.unstick();
+
+      const moves = this.buildMovements();
+      if (!this.isGoalReachable(target, moves)) {
+        this.log.warn('goal no longer reachable after unstick');
+        return false;
+      }
     }
 
     this.log.warn('exhausted pathfinding attempts');
 
     return false;
+  }
+
+  private async unstick(): Promise<void> {
+    this.log.info('unsticking');
+    this.pbot.setControlState('back', true);
+    await Utils.sleep(800);
+    this.pbot.setControlState('back', false);
+    await Utils.sleep(200);
   }
 
   private async stepToward(target: Vec3, range: number): Promise<StepResult> {

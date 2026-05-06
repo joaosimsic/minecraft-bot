@@ -2,8 +2,7 @@ import type { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
 import { Logger } from './Logger';
 import { Utils } from './Utils';
-
-const LAVA_NAMES = new Set(['lava', 'flowing_lava', 'still_lava']);
+import { LAVA_NAMES, FILLER_BLOCKS } from './constants';
 
 const INVALID_REF = new Set([
   'air',
@@ -40,7 +39,7 @@ export class Lava {
     const filler = Utils.findItem(
       this.bot,
       (n) =>
-        n === 'cobblestone' || n === 'dirt' || n === 'stone' || n === 'gravel',
+        FILLER_BLOCKS.has(n),
     );
 
     if (!filler) {

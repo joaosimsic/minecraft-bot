@@ -9,6 +9,7 @@ import { Combat } from './Combat';
 import { Lighting } from './Lighting';
 import { Door } from './Door';
 import { state } from './state';
+import { LAVA_NAMES, FILLER_BLOCKS } from './constants';
 
 const UNBREAKABLE = new Set([
   'bedrock',
@@ -16,7 +17,6 @@ const UNBREAKABLE = new Set([
   'flowing_water',
   'still_water',
 ]);
-const LAVA_NAMES = new Set(['lava', 'flowing_lava', 'still_lava']);
 const AIR_OR_LAVA = new Set(['air', 'lava', 'flowing_lava', 'still_lava']);
 
 type PathfinderBot = Bot & { pathfinder: Pathfinder };
@@ -154,7 +154,7 @@ export class Mine {
 
     const cobble = Utils.findItem(
       this.pbot,
-      (n) => n === 'cobblestone' || n === 'dirt',
+      (n) => FILLER_BLOCKS.has(n),
     );
     if (!cobble) return;
 

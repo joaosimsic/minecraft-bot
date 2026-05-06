@@ -5,6 +5,9 @@ import mcData from 'minecraft-data';
 import { Logger } from './Logger';
 import { Utils } from './Utils';
 
+const CRAFTING_BLOCKS = new Set(['crafting_table', 'workbench']);
+const PLANK_NAMES     = new Set(['planks', 'wood', 'oak_planks']);
+
 export class Craft {
   private readonly log = new Logger('Craft');
   private readonly mc: ReturnType<typeof mcData>;
@@ -16,7 +19,7 @@ export class Craft {
   public findCraftingTable(range = 16): Block | null {
     return this.bot.findBlock({
       matching: (b) =>
-        b !== null && (b.name === 'crafting_table' || b.name === 'workbench'),
+        b !== null && CRAFTING_BLOCKS.has(b.name),
       maxDistance: range,
     });
   }
@@ -56,7 +59,7 @@ export class Craft {
   public async ensurePlanks(want: number): Promise<boolean> {
     const have = Utils.countItem(
       this.bot,
-      (n) => n === 'planks' || n === 'wood' || n === 'oak_planks',
+      (n) => PLANK_NAMES.has(n),
     );
     if (have >= want) return true;
 
@@ -87,7 +90,7 @@ export class Craft {
 
     const existing = Utils.findItem(
       this.bot,
-      (n) => n === 'crafting_table' || n === 'workbench',
+      (n) => CRAFTING_BLOCKS.has(n),
     );
     if (!existing) {
       await this.ensurePlanks(4);
@@ -96,7 +99,7 @@ export class Craft {
 
     const have = Utils.findItem(
       this.bot,
-      (n) => n === 'crafting_table' || n === 'workbench',
+      (n) => CRAFTING_BLOCKS.has(n),
     );
     if (!have) return null;
 

@@ -11,6 +11,7 @@ I have the old/ folder on root that were pretty badly built, so I'm refactoring 
 3. No else if or else
 4. Minimum indentation as possible
 5. Pay attention to performance and maintainability
+6. When comparing or working with a list, use sets for better performance and maintainability
 
 # Style
 

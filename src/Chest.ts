@@ -6,6 +6,8 @@ import { Utils } from './Utils';
 
 type Want = { name: string; count: number };
 
+const WEAPON_TYPES = ['pickaxe', 'sword', 'axe'];
+
 const KEEP_LIMITS: Record<string, number> = {
   torch: 16,
   cobblestone: 64,
@@ -98,12 +100,7 @@ export class Chest {
   }
 
   private static shouldKeep(name: string, count: number): number {
-    if (
-      name.includes('pickaxe') ||
-      name.includes('sword') ||
-      name.includes('axe')
-    )
-      return count;
+    if (WEAPON_TYPES.some(t => name.includes(t))) return count;
     return Math.min(KEEP_LIMITS[name] ?? 0, count);
   }
 }

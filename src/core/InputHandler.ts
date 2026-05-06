@@ -1,7 +1,7 @@
 import * as readline from 'node:readline';
 import { Vec3 } from 'vec3';
 import { Logger } from '../shared/Logger';
-import type { ModeController } from '../modes/ModeController';
+import type { ModeController } from './ModeController';
 import type { AutoMode } from '../modes/AutoMode';
 import type { GuidedMode } from '../modes/GuidedMode';
 

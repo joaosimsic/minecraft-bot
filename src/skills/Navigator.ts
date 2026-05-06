@@ -3,14 +3,14 @@ import type { Pathfinder } from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { Movements, goals } from 'mineflayer-pathfinder';
 import { Logger } from '../shared/Logger';
-import { Door } from '../skills/Door';
+import { Door } from './Door';
 import { Utils } from '../shared/Utils';
 import { wrap } from '../shared/result';
 
 type PathfinderBot = Bot & { pathfinder: Pathfinder };
 type StepResult = 'reached' | 'timeout' | 'nopath';
 
-const MAX_ATTEMPTS = 10;
+const MAX_ATTEMPTS = 3;
 
 export class Navigator {
   private readonly log = new Logger('Navigator');

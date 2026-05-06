@@ -1,6 +1,6 @@
 import { Logger } from '../shared/Logger';
-import type { BotMode } from './BotMode';
-import { IdleMode } from './IdleMode';
+import type { BotMode } from '../modes/BotMode';
+import { IdleMode } from '../modes/IdleMode';
 
 export class ModeController {
   private readonly log = new Logger('ModeController');

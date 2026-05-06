@@ -1,7 +1,7 @@
 import { Vec3 } from 'vec3';
 import { Utils } from '../shared/Utils';
 import type { BotMode } from './BotMode';
-import type { Navigator } from '../core/Navigator';
+import type { Navigator } from '../skills/Navigator';
 
 export class GuidedMode implements BotMode {
   private target: Vec3 | null = null;

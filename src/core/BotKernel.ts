@@ -4,10 +4,10 @@ import { Craft } from '../skills/Craft';
 import { Door } from '../skills/Door';
 import { InputHandler } from './InputHandler';
 import { Mine } from '../skills/Mine';
-import { Navigator } from './Navigator';
+import { Navigator } from '../skills/Navigator';
 import { AutoMode } from '../modes/AutoMode';
 import { GuidedMode } from '../modes/GuidedMode';
-import { ModeController } from '../modes/ModeController';
+import { ModeController } from './ModeController';
 
 export class BotKernel {
   public readonly bot: Bot;

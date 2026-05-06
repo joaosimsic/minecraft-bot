@@ -8,7 +8,7 @@ import { Lava } from './Lava';
 import { Combat } from './Combat';
 import { Lighting } from './Lighting';
 import { Door } from './Door';
-import { state } from './state';
+import { wrap } from './result';
 import { LAVA_NAMES, FILLER_BLOCKS } from './constants';
 
 const UNBREAKABLE = new Set([
@@ -29,7 +29,7 @@ export class Mine {
   private readonly lighting: Lighting;
   private readonly door: Door;
 
-  constructor(bot: Bot) {
+  public constructor(bot: Bot) {
     this.pbot = bot as PathfinderBot;
     this.lava = new Lava(bot);
     this.combat = new Combat(bot);
@@ -49,17 +49,17 @@ export class Mine {
 
     this.log.info('descendTo: pathfinding to Y', targetY);
 
-    const reached = await Utils.withTimeout(
+    const [wErr, reachedVal] = await Utils.withTimeout(
       this.pbot.pathfinder
         .goto(new goals.GoalNear(x, targetY, z, 10))
-        .then(() => Math.floor(this.pbot.entity.position.y) <= targetY + 2),
+        .then((): boolean => Math.floor(this.pbot.entity.position.y) <= targetY + 2),
       30000,
       'descendTo',
-    ).catch((e: Error) => {
-      this.log.warn('pathfinder failed, digging down', e.message);
-      return false as const;
-    });
+    );
 
+    if (wErr) this.log.warn('pathfinder failed, digging down', wErr.message);
+
+    const reached = !wErr && reachedVal === true;
     if (reached) return;
 
     await this.digDown(targetY);
@@ -67,8 +67,6 @@ export class Mine {
 
   public async stripMineStep(dir: Vec3, length: number): Promise<void> {
     for (let i = 0; i < length; i++) {
-      if (state.shouldStop) return;
-
       await this.combat.fightNearby(6);
       await this.lava.sealNearby(4);
 
@@ -111,9 +109,8 @@ export class Mine {
 
     if (!this.pbot.canDigBlock(b)) return;
 
-    await this.pbot
-      .dig(b)
-      .catch((e: Error) => this.log.warn('dig fail', b.name, e.message));
+    const [digErr] = await wrap(this.pbot.dig(b));
+    if (digErr) this.log.warn('dig fail', b.name, digErr.message);
   }
 
   private async moveTo(pos: Vec3): Promise<boolean> {
@@ -127,9 +124,8 @@ export class Mine {
         return true;
       }
 
-      await this.pbot
-        .lookAt(pos.offset(0, 1.6, 0))
-        .catch((e: Error) => this.log.warn('lookAt failed', e.message));
+      const [lookErr] = await wrap(this.pbot.lookAt(pos.offset(0, 1.6, 0)));
+      if (lookErr) this.log.warn('lookAt failed', lookErr.message);
 
       await this.door.openDoorsAhead();
       this.pbot.setControlState('forward', true);
@@ -161,9 +157,13 @@ export class Mine {
     const ref = this.pbot.blockAt(aheadDown.offset(0, -1, 0));
     if (!ref || ref.name === 'air') return;
 
-    await this.pbot
-      .equip(cobble, 'hand')
-      .then(() => this.pbot.placeBlock(ref, new Vec3(0, 1, 0)))
-      .catch((e: Error) => this.log.warn('fill floor failed', e.message));
+    const [eqErr] = await wrap(this.pbot.equip(cobble, 'hand'));
+    if (eqErr) {
+      this.log.warn('fill floor failed', eqErr.message);
+      return;
+    }
+
+    const [plErr] = await wrap(this.pbot.placeBlock(ref, new Vec3(0, 1, 0)));
+    if (plErr) this.log.warn('fill floor failed', plErr.message);
   }
 }

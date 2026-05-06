@@ -5,6 +5,7 @@ import { Movements, goals } from 'mineflayer-pathfinder';
 import { Logger } from './Logger';
 import { Door } from './Door';
 import { Utils } from './Utils';
+import { wrap } from './result';
 
 type PathfinderBot = Bot & { pathfinder: Pathfinder };
 type StepResult = 'reached' | 'timeout' | 'nopath';
@@ -33,6 +34,7 @@ export class Navigator {
     }
 
     const reached = await this.iterativePathfind(target, range);
+
     if (reached) return true;
 
     return this.manualWalkTo(target);
@@ -40,20 +42,26 @@ export class Navigator {
 
   private buildMovements(): Movements {
     const moves = new Movements(this.pbot);
+
     moves.canDig = false;
     moves.allow1by1towers = false;
     moves.canOpenDoors = true;
+
     this.pbot.pathfinder.setMovements(moves);
+
     return moves;
   }
 
   private isGoalReachable(target: Vec3, moves: Movements): boolean {
     const botPos = this.pbot.entity.position;
     const botGoal = new goals.GoalNear(botPos.x, botPos.y, botPos.z, 1);
+
     const iter = this.pbot.pathfinder.getPathFromTo(moves, target, botGoal, {
       timeout: 3000,
     });
+
     const { value } = iter.next();
+
     return value.result.status !== 'noPath';
   }
 
@@ -74,27 +82,33 @@ export class Navigator {
       const step = await this.stepToward(target, range);
 
       if (step === 'reached') return true;
+
       if (step === 'nopath') return false;
 
       attempts++;
     }
 
     this.log.warn('exhausted pathfinding attempts');
+
     return false;
   }
 
   private async stepToward(target: Vec3, range: number): Promise<StepResult> {
-    return this.pbot.pathfinder
-      .goto(new goals.GoalNear(target.x, target.y, target.z, range))
-      .then((): StepResult => 'reached')
-      .catch((e: Error): StepResult => {
-        if (e.name === 'NoPath') {
-          this.log.warn('no path to goal');
-          return 'nopath';
-        }
-        this.log.info('partial path (timeout), continuing from new position');
-        return 'timeout';
-      });
+    const [err] = await wrap(
+      this.pbot.pathfinder.goto(
+        new goals.GoalNear(target.x, target.y, target.z, range),
+      ),
+    );
+
+    if (!err) return 'reached';
+
+    if (err.name === 'NoPath') {
+      this.log.warn('no path to goal');
+      return 'nopath';
+    }
+    this.log.info('partial path (timeout), continuing from new position');
+
+    return 'timeout';
   }
 
   private async manualWalkTo(target: Vec3): Promise<boolean> {
@@ -112,9 +126,10 @@ export class Navigator {
         return true;
       }
 
-      await this.pbot
-        .lookAt(new Vec3(target.x, pos.y + 1.6, target.z))
-        .catch((e: Error) => this.log.warn('lookAt failed', e.message));
+      const [lookErr] = await wrap(
+        this.pbot.lookAt(new Vec3(target.x, pos.y + 1.6, target.z)),
+      );
+      if (lookErr) this.log.warn('lookAt failed', lookErr.message);
 
       await this.door.openDoorsAhead();
 
@@ -137,4 +152,3 @@ export class Navigator {
     return false;
   }
 }
-

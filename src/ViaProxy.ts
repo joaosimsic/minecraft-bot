@@ -3,6 +3,8 @@ import { connect } from 'node:net';
 import { join } from 'node:path';
 import { config } from './config';
 import { Logger } from './Logger';
+import type { AsyncResult, Result } from './result';
+import { okVoid } from './result';
 
 const JAR_VER = config.env.VIAPROXY_VERSION;
 const JAR_NAME = `ViaProxy-${JAR_VER}.jar`;
@@ -22,11 +24,11 @@ export class ViaProxy {
     },
   ) {}
 
-  static needsProxy(version: string): boolean {
+  public static needsProxy(version: string): boolean {
     return /^(b|a|c)\d|(beta|alpha|classic)/i.test(version);
   }
 
-  private async checkJava(): Promise<void> {
+  private async checkJava(): AsyncResult<null> {
     const proc = Bun.spawn(['java', '-version'], {
       stderr: 'ignore',
       stdout: 'ignore',
@@ -35,13 +37,15 @@ export class ViaProxy {
     await proc.exited;
 
     if (proc.exitCode !== 0)
-      throw new Error('java not found in PATH. Install JRE 17+.');
+      return [new Error('java not found in PATH. Install JRE 17+'), null];
+
+    return okVoid();
   }
 
-  private async ensureJar(): Promise<void> {
+  private async ensureJar(): AsyncResult<null> {
     if (existsSync(JAR_PATH)) {
       this.log.info('jar present', JAR_PATH);
-      return;
+      return okVoid();
     }
 
     if (!existsSync(PROXY_DIR)) mkdirSync(PROXY_DIR, { recursive: true });
@@ -55,16 +59,16 @@ export class ViaProxy {
     });
     await proc.exited;
 
-    if (proc.exitCode !== 0) throw new Error(`download failed: curl exited ${proc.exitCode}`);
+    if (proc.exitCode !== 0)
+      return [new Error(`download failed: curl exited ${proc.exitCode}`), null];
 
     this.log.info('downloaded', JAR_PATH);
+    return okVoid();
   }
 
-  private async waitForPort(timeoutMs = 60000): Promise<void> {
+  private async waitForPort(timeoutMs = 60000): AsyncResult<null> {
     const { bindPort } = this.opts;
-
     const start = Date.now();
-
     let lastErrMsg: string | null = null;
 
     while (Date.now() - start < timeoutMs) {
@@ -76,23 +80,29 @@ export class ViaProxy {
           resolve(true);
         });
 
-        s.once('error', (err) => {
+        s.once('error', (err: Error) => {
           lastErrMsg = err.message;
           resolve(false);
         });
       });
-      if (ok) return;
+      if (ok) return okVoid();
 
       await Bun.sleep(500);
     }
-    throw new Error(
-      `port ${bindPort} not open after ${timeoutMs}ms (last: ${lastErrMsg})`,
-    );
+    return [
+      new Error(
+        `port ${bindPort} not open after ${timeoutMs}ms (last: ${lastErrMsg})`,
+      ),
+      null,
+    ];
   }
 
-  public async start(): Promise<void> {
-    await this.checkJava();
-    await this.ensureJar();
+  public async start(): AsyncResult<null> {
+    const [e0] = await this.checkJava();
+    if (e0) return [e0, null];
+
+    const [e1] = await this.ensureJar();
+    if (e1) return [e1, null];
 
     const { bindPort, targetHost, targetPort, targetVersion } = this.opts;
 
@@ -115,17 +125,24 @@ export class ViaProxy {
       stderr: 'inherit',
     });
 
-    this.proc.exited.then(() => {
+    void this.proc.exited.then(() => {
       this.log.info('exited code', this.proc?.exitCode);
     });
 
     const portReady = this.waitForPort();
 
-    const earlyExit = this.proc.exited.then(() => {
-      throw new Error('viaproxy exited before port opened; check java logs');
-    });
+    const earlyExit: Promise<Result<null>> = this.proc.exited.then(
+      (): Result<null> => [
+        new Error('viaproxy exited before port opened; check java logs'),
+        null,
+      ],
+    );
 
-    await Promise.race([portReady, earlyExit]);
+    const raced = await Promise.race([portReady, earlyExit]);
+    const [e2] = raced;
+    if (e2) return [e2, null];
+
+    return okVoid();
   }
 
   public stop(): void {

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Vec3 } from 'vec3';
 import { envSchema, type Env } from './schemas';
 
-const result = envSchema.safeParse(process.env as Record<string, unknown>);
+const result = envSchema.safeParse(process.env as NodeJS.ProcessEnv);
 
 if (!result.success) {
   console.error('Invalid env vars:\n', z.flattenError(result.error).fieldErrors);

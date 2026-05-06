@@ -2,6 +2,7 @@ import type { Bot } from 'mineflayer';
 import type { Block } from 'prismarine-block';
 import { Vec3 } from 'vec3';
 import { Logger } from './Logger';
+import { wrap } from './result';
 
 interface BlockWithProps extends Block {
   properties?: Record<string, string | boolean>;
@@ -36,17 +37,15 @@ export class Door {
 
     setTimeout(() => this.recentlyToggled.delete(key), 4000);
 
-    return this.bot
-      .activateBlock(block)
-      .then(() => {
-        this.log.info('opened at', `(${pos.x}, ${pos.y}, ${pos.z})`);
-        void this.closeDoorWhenClear(block, pos);
-        return true as const;
-      })
-      .catch((e: Error) => {
-        this.log.error('open fail', e.message);
-        return false as const;
-      });
+    const [err] = await wrap(this.bot.activateBlock(block));
+    if (err) {
+      this.log.error('open fail', err.message);
+      return false;
+    }
+
+    this.log.info('opened at', `(${pos.x}, ${pos.y}, ${pos.z})`);
+    void this.closeDoorWhenClear(block, pos);
+    return true;
   }
 
   public async openDoorsAhead(): Promise<void> {
@@ -76,10 +75,10 @@ export class Door {
       if (hasSteppedInside && dist > 1.5) {
         await new Promise<void>((r) => setTimeout(r, 300));
 
-        await this.bot
-          .activateBlock(block)
-          .catch((e: Error) => this.log.error('close fail', e.message));
-        this.log.info('closed at', `(${pos.x}, ${pos.y}, ${pos.z})`);
+        const [clErr] = await wrap(this.bot.activateBlock(block));
+        if (clErr) this.log.error('close fail', clErr.message);
+        if (!clErr)
+          this.log.info('closed at', `(${pos.x}, ${pos.y}, ${pos.z})`);
 
         return;
       }
@@ -88,4 +87,3 @@ export class Door {
     }
   }
 }
-

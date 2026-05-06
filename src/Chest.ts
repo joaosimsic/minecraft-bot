@@ -3,10 +3,11 @@ import type { Block } from 'prismarine-block';
 import { Vec3 } from 'vec3';
 import { Logger } from './Logger';
 import { Utils } from './Utils';
+import { wrap } from './result';
 
 type Want = { name: string; count: number };
 
-const WEAPON_TYPES = ['pickaxe', 'sword', 'axe'];
+const WEAPON_TYPES = new Set(['pickaxe', 'sword', 'axe']);
 
 const KEEP_LIMITS: Record<string, number> = {
   torch: 16,
@@ -25,7 +26,7 @@ const KEEP_LIMITS: Record<string, number> = {
 export class Chest {
   private readonly log = new Logger('Chest');
 
-  constructor(private readonly bot: Bot) {}
+  public constructor(private readonly bot: Bot) {}
 
   public findChest(range = 24): Block | null {
     return this.bot.findBlock({
@@ -44,48 +45,64 @@ export class Chest {
     const ground = this.bot.blockAt(new Vec3(pos.x, pos.y - 1, pos.z));
     if (!ground || ground.name === 'air') return null;
 
-    return this.bot
-      .equip(chestItem, 'hand')
-      .then(() => this.bot.placeBlock(ground, new Vec3(0, 1, 0)))
-      .then(() => Utils.sleep(300))
-      .then(() => this.findChest(4))
-      .catch((e: Error) => {
-        this.log.warn('place fail', e.message);
-        return null;
-      });
+    const [eqErr] = await wrap(this.bot.equip(chestItem, 'hand'));
+    if (eqErr) {
+      this.log.warn('place fail', eqErr.message);
+      return null;
+    }
+
+    const [plErr] = await wrap(this.bot.placeBlock(ground, new Vec3(0, 1, 0)));
+    if (plErr) {
+      this.log.warn('place fail', plErr.message);
+      return null;
+    }
+
+    await Utils.sleep(300);
+    return this.findChest(4);
   }
 
   public async depositAll(chestBlock: Block): Promise<void> {
-    const chest = await this.bot.openChest(chestBlock);
+    const [openErr, win] = await wrap(this.bot.openChest(chestBlock));
+    if (openErr) {
+      this.log.warn('open chest failed', openErr.message);
+      return;
+    }
+    if (win === null) return;
 
     for (const it of this.bot.inventory.items()) {
       const give = it.count - Chest.shouldKeep(it.name, it.count);
       if (give <= 0) continue;
 
-      await chest
-        .deposit(it.type, it.metadata, give)
-        .then(() => this.log.info('deposit', give, it.name))
-        .catch((e: Error) => this.log.warn('deposit fail', it.name, e.message));
+      const [depErr] = await wrap(win.deposit(it.type, it.metadata, give));
+      if (depErr)
+        this.log.warn('deposit fail', it.name, depErr.message);
+      if (!depErr) this.log.info('deposit', give, it.name);
     }
 
-    chest.close();
+    win.close();
   }
 
   public async withdrawIfHas(chestBlock: Block, want: Want[]): Promise<void> {
-    const chest = await this.bot.openChest(chestBlock);
+    const [openErr, win] = await wrap(this.bot.openChest(chestBlock));
+    if (openErr) {
+      this.log.warn('open chest failed', openErr.message);
+      return;
+    }
+    if (win === null) return;
 
     for (const w of want) {
-      const slot = chest.containerItems().find((i) => i.name === w.name);
+      const slot = win.containerItems().find((i) => i.name === w.name);
       if (!slot) continue;
 
       const take = Math.min(slot.count, w.count);
-      await chest
-        .withdraw(slot.type, slot.metadata, take)
-        .then(() => this.log.info('withdrew', take, w.name))
-        .catch((e: Error) => this.log.warn('withdraw fail', w.name, e.message));
+      const [wErr] = await wrap(
+        win.withdraw(slot.type, slot.metadata, take),
+      );
+      if (wErr) this.log.warn('withdraw fail', w.name, wErr.message);
+      if (!wErr) this.log.info('withdrew', take, w.name);
     }
 
-    chest.close();
+    win.close();
   }
 
   public async depositRoutine(): Promise<boolean> {
@@ -100,8 +117,9 @@ export class Chest {
   }
 
   private static shouldKeep(name: string, count: number): number {
-    if (WEAPON_TYPES.some(t => name.includes(t))) return count;
+    for (const t of WEAPON_TYPES) {
+      if (name.includes(t)) return count;
+    }
     return Math.min(KEEP_LIMITS[name] ?? 0, count);
   }
 }
-

@@ -2,6 +2,7 @@ import type { Bot } from 'mineflayer';
 import type { Entity } from 'prismarine-entity';
 import { Logger } from './Logger';
 import { Utils } from './Utils';
+import { wrap } from './result';
 
 interface MobEntity extends Entity {
   mobType?: string;
@@ -62,9 +63,10 @@ export class Combat {
       const d = target.position.distanceTo(this.bot.entity.position);
 
       if (d > 4) {
-        await this.bot
-          .lookAt(target.position.offset(0, 1, 0))
-          .catch((e: Error) => this.log.warn('lookAt failed', e.message));
+        const [lookErr] = await wrap(
+          this.bot.lookAt(target.position.offset(0, 1, 0)),
+        );
+        if (lookErr) this.log.warn('lookAt failed', lookErr.message);
 
         this.bot.setControlState('forward', true);
 
@@ -75,9 +77,10 @@ export class Combat {
         continue;
       }
 
-      await this.bot
-        .lookAt(target.position.offset(0, 1, 0))
-        .catch((e: Error) => this.log.warn('lookAt failed', e.message));
+      const [lookErr2] = await wrap(
+        this.bot.lookAt(target.position.offset(0, 1, 0)),
+      );
+      if (lookErr2) this.log.warn('lookAt failed', lookErr2.message);
 
       this.bot.attack(target);
 
@@ -99,7 +102,7 @@ export class Combat {
 
     if (!sword) return;
 
-    await this.bot.equip(sword, 'hand').catch((e: Error) => this.log.warn('equip failed', e.message));
+    const [eqErr] = await wrap(this.bot.equip(sword, 'hand'));
+    if (eqErr) this.log.warn('equip failed', eqErr.message);
   }
 }
-

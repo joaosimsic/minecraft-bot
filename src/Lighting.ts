@@ -2,6 +2,7 @@ import type { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
 import { Logger } from './Logger';
 import { Utils } from './Utils';
+import { wrap } from './result';
 
 const INVALID_SURFACE = new Set(['air', 'lava', 'water']);
 
@@ -25,12 +26,11 @@ export class Lighting {
 
     if (!torch) return false;
 
-    const equipped = await this.bot
-      .equip(torch, 'hand')
-      .then(() => true)
-      .catch((e: Error) => { this.log.warn('equip failed', e.message); return false as const; });
-
-    if (!equipped) return false;
+    const [eqErr] = await wrap(this.bot.equip(torch, 'hand'));
+    if (eqErr) {
+      this.log.warn('equip failed', eqErr.message);
+      return false;
+    }
 
     for (const c of this.torchCandidates()) {
       const ref = this.bot.blockAt(c);
@@ -41,16 +41,15 @@ export class Lighting {
 
       if (!above || above.name !== 'air') continue;
 
-      const placed = await this.bot
-        .placeBlock(ref, new Vec3(0, 1, 0))
-        .then(() => Utils.sleep(200))
-        .then(() => {
-          this.log.info('torch placed at', c.offset(0, 1, 0));
-          return true as const;
-        })
-        .catch((e: Error) => { this.log.warn('place failed', e.message); return false as const; });
+      const [plErr] = await wrap(this.bot.placeBlock(ref, new Vec3(0, 1, 0)));
+      if (plErr) {
+        this.log.warn('place failed', plErr.message);
+        continue;
+      }
 
-      if (placed) return true;
+      await Utils.sleep(200);
+      this.log.info('torch placed at', c.offset(0, 1, 0));
+      return true;
     }
 
     return false;

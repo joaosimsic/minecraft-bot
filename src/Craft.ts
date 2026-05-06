@@ -4,9 +4,11 @@ import { Vec3 } from 'vec3';
 import mcData from 'minecraft-data';
 import { Logger } from './Logger';
 import { Utils } from './Utils';
+import { wrap } from './result';
 
 const CRAFTING_BLOCKS = new Set(['crafting_table', 'workbench']);
-const PLANK_NAMES     = new Set(['planks', 'wood', 'oak_planks']);
+const PLANK_NAMES = new Set(['planks', 'wood', 'oak_planks']);
+const LOG_NAMES = new Set(['log', 'wood']);
 
 export class Craft {
   private readonly log = new Logger('Craft');
@@ -37,23 +39,22 @@ export class Craft {
     const id = this.itemId(name);
     if (id == null) {
       this.log.warn('unknown item', name);
-      return Promise.resolve(false);
+      return false;
     }
     const recipes = this.bot.recipesFor(id, null, count, table);
     if (!recipes.length) {
       this.log.warn('no recipe for', name, table ? '(table)' : '(2x2)');
-      return Promise.resolve(false);
+      return false;
     }
-    return this.bot
-      .craft(recipes[0]!, count, table ?? undefined)
-      .then((): boolean => {
-        this.log.info('made', count, name);
-        return true;
-      })
-      .catch((e: Error) => {
-        this.log.warn('failed', name, e.message);
-        return false;
-      });
+    const [err] = await wrap(
+      this.bot.craft(recipes[0]!, count, table ?? undefined),
+    );
+    if (err) {
+      this.log.warn('failed', name, err.message);
+      return false;
+    }
+    this.log.info('made', count, name);
+    return true;
   }
 
   public async ensurePlanks(want: number): Promise<boolean> {
@@ -65,7 +66,7 @@ export class Craft {
 
     const logItem = Utils.findItem(
       this.bot,
-      (n) => n === 'log' || n === 'wood' || n.endsWith('_log'),
+      (n) => LOG_NAMES.has(n) || n.endsWith('_log'),
     );
     if (!logItem) return false;
 
@@ -106,15 +107,20 @@ export class Craft {
     const ref = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0));
     if (!ref) return null;
 
-    return this.bot
-      .equip(have, 'hand')
-      .then(() => this.bot.placeBlock(ref, new Vec3(0, 1, 0)))
-      .then(() => Utils.sleep(300))
-      .then(() => this.findCraftingTable(4))
-      .catch((e: Error) => {
-        this.log.warn('place failed', e.message);
-        return null;
-      });
+    const [eqErr] = await wrap(this.bot.equip(have, 'hand'));
+    if (eqErr) {
+      this.log.warn('place failed', eqErr.message);
+      return null;
+    }
+
+    const [plErr] = await wrap(this.bot.placeBlock(ref, new Vec3(0, 1, 0)));
+    if (plErr) {
+      this.log.warn('place failed', plErr.message);
+      return null;
+    }
+
+    await Utils.sleep(300);
+    return this.findCraftingTable(4);
   }
 
   public async craftPickaxe(): Promise<boolean> {
@@ -166,4 +172,3 @@ export class Craft {
       await this.craftSword();
   }
 }
-

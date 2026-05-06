@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
-const envBoolean = z.enum(['true', 'false', '1', '0']).transform(v => v === 'true' || v === '1');
+const envBoolean = z
+  .enum(['true', 'false', '1', '0'])
+  .transform((v): boolean => v === 'true' || v === '1');
 
 export const proxySchema = {
   VIAPROXY_VERSION: z.string().min(1),

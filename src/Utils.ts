@@ -1,26 +1,28 @@
 import type { Bot } from 'mineflayer';
 import type { Item } from 'prismarine-item';
+import type { AsyncResult, Result } from './result';
+import { wrap } from './result';
 
 export class Utils {
-  static sleep(ms: number): Promise<void> {
+  public static sleep(ms: number): Promise<void> {
     return new Promise<void>((r) => setTimeout(r, ms));
   }
 
-  static findItem(
+  public static findItem(
     bot: Bot,
     predicate: (name: string) => boolean,
   ): Item | undefined {
     return bot.inventory.items().find((i) => predicate(i.name));
   }
 
-  static countItem(bot: Bot, predicate: (name: string) => boolean): number {
+  public static countItem(bot: Bot, predicate: (name: string) => boolean): number {
     return bot.inventory
       .items()
       .filter((i) => predicate(i.name))
       .reduce((sum, i) => sum + i.count, 0);
   }
 
-  static pickaxeTier(name: string): number {
+  public static pickaxeTier(name: string): number {
     if (name.includes('diamond')) return 4;
     if (name.includes('iron')) return 3;
     if (name.includes('stone')) return 2;
@@ -28,11 +30,15 @@ export class Utils {
     return 0;
   }
 
-  static withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-    const timeout = Utils.sleep(ms).then((): never => {
-      throw new Error(`timeout: ${label}`);
-    });
-    return Promise.race([p, timeout]);
+  public static async withTimeout<T>(
+    p: Promise<T>,
+    ms: number,
+    label: string,
+  ): AsyncResult<T> {
+    const settled = wrap(p);
+    const timed = Utils.sleep(ms).then(
+      (): Result<T> => [new Error(`timeout: ${label}`), null],
+    );
+    return Promise.race([settled, timed]);
   }
 }
-

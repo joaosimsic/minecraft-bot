@@ -1,15 +1,19 @@
 import mineflayer from 'mineflayer';
 import { pathfinder } from 'mineflayer-pathfinder';
 import { config } from './config';
-import { state } from './state';
 import { ViaProxy } from './ViaProxy';
 import { Logger } from './Logger';
-import { Utils } from './Utils';
 import { Navigator } from './Navigator';
 import { Mine } from './Mine';
 import { Craft } from './Craft';
 import { Chest } from './Chest';
 import { Door } from './Door';
+import { AutoMode } from './modes/AutoMode';
+import { GuidedMode } from './modes/GuidedMode';
+import { ModeController } from './modes/ModeController';
+import { InputHandler } from './InputHandler';
+import type { AsyncResult } from './result';
+import { okVoid, wrap } from './result';
 
 const log = new Logger('main');
 
@@ -23,7 +27,7 @@ class BotRunner {
     return ViaProxy.needsProxy(VERSION);
   }
 
-  private async startProxy(): Promise<void> {
+  private async startProxy(): AsyncResult<null> {
     const { HOST, PORT, VERSION, VIAPROXY_PORT } = config.env;
     this.proxy = new ViaProxy({
       bindPort: VIAPROXY_PORT,
@@ -31,7 +35,7 @@ class BotRunner {
       targetPort: PORT,
       targetVersion: VERSION,
     });
-    await this.proxy.start();
+    return this.proxy.start();
   }
 
   private createBot(): mineflayer.Bot {
@@ -48,46 +52,11 @@ class BotRunner {
     });
   }
 
-  private async runGuided(navigator: Navigator): Promise<void> {
-    if (!state.guidedTarget) {
-      await Utils.sleep(1000);
-      return;
+  public async run(): AsyncResult<null> {
+    if (this.shouldUseProxy()) {
+      const [e] = await this.startProxy();
+      if (e) return [e, null];
     }
-    await navigator.walkTo(state.guidedTarget);
-    state.guidedTarget = null;
-  }
-
-  private async runAuto(mine: Mine, craft: Craft, chest: Chest): Promise<void> {
-    await craft.ensureTools();
-    await craft.craftTorches();
-    await mine.descendTo(state.targetY);
-    await mine.stripMineStep(state.miningDir, 16);
-    await chest.depositRoutine();
-  }
-
-  private async runLoop(
-    mine: Mine,
-    craft: Craft,
-    chest: Chest,
-    navigator: Navigator,
-  ): Promise<void> {
-    while (!state.forceStop) {
-      if (state.shouldStop) {
-        await Utils.sleep(1000);
-        continue;
-      }
-
-      if (state.mode === 'guided') {
-        await this.runGuided(navigator);
-        continue;
-      }
-
-      await this.runAuto(mine, craft, chest);
-    }
-  }
-
-  public async run(): Promise<void> {
-    if (this.shouldUseProxy()) await this.startProxy();
 
     const bot = this.createBot();
     bot.loadPlugin(pathfinder);
@@ -98,23 +67,35 @@ class BotRunner {
     const craft = new Craft(bot);
     const chest = new Chest(bot);
 
+    const autoMode = new AutoMode(mine, craft, chest);
+    const guidedMode = new GuidedMode(navigator);
+    const controller = new ModeController();
+    const input = new InputHandler(controller, autoMode, guidedMode);
+
+    if (config.env.MODE === 'auto') controller.switchTo(autoMode);
+
     bot.once('spawn', () => {
-      log.info('spawned');
-      this.runLoop(mine, craft, chest, navigator).catch((e: Error) =>
-        log.error('loop crashed', e.message),
-      );
+      log.info('spawned — commands: auto | guided | stop | exit | <x> <y> <z>');
+      void wrap(controller.run()).then(([le]) => {
+        if (le) log.error('loop crashed', le.message);
+      });
     });
 
     bot.on('error', (e: Error) => log.error('bot error', e.message));
     bot.on('kicked', (reason: string) => log.warn('kicked', reason));
     bot.on('end', () => {
       log.info('disconnected');
+      controller.halt();
+      input.close();
       this.proxy?.stop();
     });
+
+    return okVoid();
   }
 }
 
-new BotRunner().run().catch((e: Error) => {
-  log.error('fatal', e.message);
+const [fatal] = await new BotRunner().run();
+if (fatal) {
+  log.error('fatal', fatal.message);
   process.exit(1);
-});
+}

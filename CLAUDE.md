@@ -16,3 +16,4 @@ I have the old/ folder on root that were pretty badly built, so I'm refactoring 
 
 1. Prefer OOP
 2. Not private methods need public keyword
+3. All functions and methods needs a return type

@@ -3,15 +3,7 @@ import { pathfinder } from 'mineflayer-pathfinder';
 import { config } from './config';
 import { ViaProxy } from './ViaProxy';
 import { Logger } from './Logger';
-import { Navigator } from './Navigator';
-import { Mine } from './Mine';
-import { Craft } from './Craft';
-import { Chest } from './Chest';
-import { Door } from './Door';
-import { AutoMode } from './modes/AutoMode';
-import { GuidedMode } from './modes/GuidedMode';
-import { ModeController } from './modes/ModeController';
-import { InputHandler } from './InputHandler';
+import { BotKernel } from './BotKernel';
 import type { AsyncResult } from './result';
 import { okVoid, wrap } from './result';
 
@@ -61,22 +53,13 @@ class BotRunner {
     const bot = this.createBot();
     bot.loadPlugin(pathfinder);
 
-    const door = new Door(bot);
-    const navigator = new Navigator(bot, door);
-    const mine = new Mine(bot);
-    const craft = new Craft(bot);
-    const chest = new Chest(bot);
+    const kernel = new BotKernel(bot);
 
-    const autoMode = new AutoMode(mine, craft, chest);
-    const guidedMode = new GuidedMode(navigator);
-    const controller = new ModeController();
-    const input = new InputHandler(controller, autoMode, guidedMode);
-
-    if (config.env.MODE === 'auto') controller.switchTo(autoMode);
+    if (config.env.MODE === 'auto') kernel.controller.switchTo(kernel.autoMode);
 
     bot.once('spawn', () => {
       log.info('spawned — commands: auto | guided | stop | exit | <x> <y> <z>');
-      void wrap(controller.run()).then(([le]) => {
+      void wrap(kernel.controller.run()).then(([le]) => {
         if (le) log.error('loop crashed', le.message);
       });
     });
@@ -85,8 +68,8 @@ class BotRunner {
     bot.on('kicked', (reason: string) => log.warn('kicked', reason));
     bot.on('end', () => {
       log.info('disconnected');
-      controller.halt();
-      input.close();
+      kernel.controller.halt();
+      kernel.input.close();
       this.proxy?.stop();
     });
 

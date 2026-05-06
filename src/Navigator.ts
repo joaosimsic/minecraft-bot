@@ -7,6 +7,9 @@ import { Door } from './Door';
 import { Utils } from './Utils';
 
 type PathfinderBot = Bot & { pathfinder: Pathfinder };
+type StepResult = 'reached' | 'timeout' | 'nopath';
+
+const MAX_ATTEMPTS = 10;
 
 export class Navigator {
   private readonly log = new Logger('Navigator');
@@ -19,42 +22,79 @@ export class Navigator {
     this.pbot = bot as PathfinderBot;
   }
 
-  public async walkTo(target: Vec3, timeoutMs = 60000): Promise<boolean> {
-    if (this.pbot.entity.position.distanceTo(target) < 0.5) return true;
+  public async walkTo(target: Vec3, range = 1): Promise<boolean> {
+    if (this.pbot.entity.position.distanceTo(target) < range) return true;
 
-    const reached = await this.pathfindTo(target, timeoutMs);
+    const moves = this.buildMovements();
 
+    if (!this.isGoalReachable(target, moves)) {
+      this.log.warn('goal is unreachable, skipping pathfinding');
+      return false;
+    }
+
+    const reached = await this.iterativePathfind(target, range);
     if (reached) return true;
 
     return this.manualWalkTo(target);
   }
 
-  private async pathfindTo(target: Vec3, timeoutMs: number): Promise<boolean> {
+  private buildMovements(): Movements {
     const moves = new Movements(this.pbot);
-
     moves.canDig = false;
     moves.allow1by1towers = false;
     moves.canOpenDoors = true;
-
     this.pbot.pathfinder.setMovements(moves);
+    return moves;
+  }
 
-    this.log.info('pathfinding to', `(${target.x}, ${target.y}, ${target.z})`);
-
-    const timeout = Utils.sleep(timeoutMs).then((): never => {
-      throw new Error('timeout');
+  private isGoalReachable(target: Vec3, moves: Movements): boolean {
+    const botPos = this.pbot.entity.position;
+    const botGoal = new goals.GoalNear(botPos.x, botPos.y, botPos.z, 1);
+    const iter = this.pbot.pathfinder.getPathFromTo(moves, target, botGoal, {
+      timeout: 3000,
     });
+    const { value } = iter.next();
+    return value.result.status !== 'noPath';
+  }
 
-    return Promise.race([
-      this.pbot.pathfinder
-        .goto(new goals.GoalBlock(target.x, target.y, target.z))
-        .then(() => true as const),
-      timeout,
-    ]).catch((e: Error) => {
-      this.log.warn(
-        e.message === 'timeout' ? 'timeout' : `pathfinder failed: ${e.message}`,
+  private async iterativePathfind(
+    target: Vec3,
+    range: number,
+  ): Promise<boolean> {
+    let attempts = 0;
+
+    while (attempts < MAX_ATTEMPTS) {
+      if (this.pbot.entity.position.distanceTo(target) < range) return true;
+
+      this.log.info(
+        `pathfinding attempt ${attempts + 1} to`,
+        `(${target.x}, ${target.y}, ${target.z})`,
       );
-      return false as const;
-    });
+
+      const step = await this.stepToward(target, range);
+
+      if (step === 'reached') return true;
+      if (step === 'nopath') return false;
+
+      attempts++;
+    }
+
+    this.log.warn('exhausted pathfinding attempts');
+    return false;
+  }
+
+  private async stepToward(target: Vec3, range: number): Promise<StepResult> {
+    return this.pbot.pathfinder
+      .goto(new goals.GoalNear(target.x, target.y, target.z, range))
+      .then((): StepResult => 'reached')
+      .catch((e: Error): StepResult => {
+        if (e.name === 'NoPath') {
+          this.log.warn('no path to goal');
+          return 'nopath';
+        }
+        this.log.info('partial path (timeout), continuing from new position');
+        return 'timeout';
+      });
   }
 
   private async manualWalkTo(target: Vec3): Promise<boolean> {

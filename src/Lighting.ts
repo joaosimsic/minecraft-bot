@@ -28,7 +28,7 @@ export class Lighting {
     const equipped = await this.bot
       .equip(torch, 'hand')
       .then(() => true)
-      .catch(() => false);
+      .catch((e: Error) => { this.log.warn('equip failed', e.message); return false as const; });
 
     if (!equipped) return false;
 
@@ -48,7 +48,7 @@ export class Lighting {
           this.log.info('torch placed at', c.offset(0, 1, 0));
           return true as const;
         })
-        .catch(() => false as const);
+        .catch((e: Error) => { this.log.warn('place failed', e.message); return false as const; });
 
       if (placed) return true;
     }

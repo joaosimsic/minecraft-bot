@@ -64,7 +64,7 @@ export class Combat {
       if (d > 4) {
         await this.bot
           .lookAt(target.position.offset(0, 1, 0))
-          .catch(() => undefined);
+          .catch((e: Error) => this.log.warn('lookAt failed', e.message));
 
         this.bot.setControlState('forward', true);
 
@@ -77,7 +77,7 @@ export class Combat {
 
       await this.bot
         .lookAt(target.position.offset(0, 1, 0))
-        .catch(() => undefined);
+        .catch((e: Error) => this.log.warn('lookAt failed', e.message));
 
       this.bot.attack(target);
 
@@ -99,7 +99,7 @@ export class Combat {
 
     if (!sword) return;
 
-    await this.bot.equip(sword, 'hand').catch(() => undefined);
+    await this.bot.equip(sword, 'hand').catch((e: Error) => this.log.warn('equip failed', e.message));
   }
 }
 

@@ -6,7 +6,7 @@ export class Logger {
   private write(level: Level, ...args: unknown[]): void {
     const t = new Date().toISOString().slice(11, 19);
 
-    const logMap: Record<Level, (...args: any[]) => void> = {
+    const logMap: Record<Level, (...args: unknown[]) => void> = {
       info: console.log,
       warn: console.warn,
       error: console.error,

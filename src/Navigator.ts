@@ -74,7 +74,7 @@ export class Navigator {
 
       await this.pbot
         .lookAt(new Vec3(target.x, pos.y + 1.6, target.z))
-        .catch(() => undefined);
+        .catch((e: Error) => this.log.warn('lookAt failed', e.message));
 
       await this.door.openDoorsAhead();
 

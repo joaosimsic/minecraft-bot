@@ -53,7 +53,7 @@ export class Lava {
     const equipped = await this.bot
       .equip(filler, 'hand')
       .then(() => true)
-      .catch(() => false);
+      .catch((e: Error) => { this.log.warn('equip failed', e.message); return false as const; });
 
     if (!equipped) return false;
 
@@ -67,7 +67,7 @@ export class Lava {
         .then(() => this.bot.placeBlock(ref, face))
         .then(() => Utils.sleep(300))
         .then(() => true as const)
-        .catch(() => false as const);
+        .catch((e: Error) => { this.log.warn('place failed', e.message); return false as const; });
 
       if (placed) return true;
     }

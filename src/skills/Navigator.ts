@@ -83,8 +83,6 @@ export class Navigator {
 
       if (step === 'reached') return true;
 
-      if (step === 'nopath') return false;
-
       attempts++;
     }
 

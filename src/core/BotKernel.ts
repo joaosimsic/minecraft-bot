@@ -31,6 +31,6 @@ export class BotKernel {
     this.autoMode = new AutoMode(this.mine, this.craft, this.chest);
     this.guidedMode = new GuidedMode(this.navigator);
     this.controller = new ModeController();
-    this.input = new InputHandler(this.controller, this.autoMode, this.guidedMode);
+    this.input = new InputHandler(this.bot, this.controller, this.autoMode, this.guidedMode);
   }
 }

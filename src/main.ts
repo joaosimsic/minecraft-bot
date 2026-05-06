@@ -31,7 +31,7 @@ class BotRunner {
   }
 
   private createBot(): mineflayer.Bot {
-    const { HOST, PORT, VERSION, VIAPROXY_PORT, CLIENT_VERSION, USER, AUTH } =
+    const { HOST, PORT, VERSION, VIAPROXY_PORT, CLIENT_VERSION, BOT_USER, AUTH } =
       config.env;
     const useProxy = this.proxy !== null;
 
@@ -39,7 +39,7 @@ class BotRunner {
       host: useProxy ? '127.0.0.1' : HOST,
       port: useProxy ? VIAPROXY_PORT : PORT,
       version: useProxy ? CLIENT_VERSION : VERSION,
-      username: USER,
+      username: BOT_USER,
       auth: AUTH,
     });
   }

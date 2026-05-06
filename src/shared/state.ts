@@ -1,5 +1,5 @@
 import { Vec3 } from 'vec3';
-import { config } from './config';
+import { config } from '../config';
 
 export interface BotState {
   home: Vec3 | null;

@@ -1,11 +1,11 @@
 import mineflayer from 'mineflayer';
 import { pathfinder } from 'mineflayer-pathfinder';
-import { config } from './config';
+import { config } from '../config';
 import { ViaProxy } from './ViaProxy';
-import { Logger } from './Logger';
-import { BotKernel } from './BotKernel';
-import type { AsyncResult } from './result';
-import { okVoid, wrap } from './result';
+import { Logger } from '../shared/Logger';
+import { BotKernel } from '../core/BotKernel';
+import type { AsyncResult } from '../shared/result';
+import { okVoid, wrap } from '../shared/result';
 
 const log = new Logger('main');
 

@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join } from 'node:path';
-import { config } from './config';
-import { Logger } from './Logger';
-import type { AsyncResult, Result } from './result';
-import { okVoid } from './result';
+import { config } from '../config';
+import { Logger } from '../shared/Logger';
+import type { AsyncResult, Result } from '../shared/result';
+import { okVoid } from '../shared/result';
 
 const JAR_VER = config.env.VIAPROXY_VERSION;
 const JAR_NAME = `ViaProxy-${JAR_VER}.jar`;

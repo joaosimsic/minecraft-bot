@@ -1,8 +1,8 @@
 import type { Bot } from 'mineflayer';
 import type { Entity } from 'prismarine-entity';
-import { Logger } from './Logger';
-import { Utils } from './Utils';
-import { wrap } from './result';
+import { Logger } from '../shared/Logger';
+import { Utils } from '../shared/Utils';
+import { wrap } from '../shared/result';
 
 interface MobEntity extends Entity {
   mobType?: string;

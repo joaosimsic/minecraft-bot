@@ -2,14 +2,14 @@ import type { Bot } from 'mineflayer';
 import type { Pathfinder } from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { Movements, goals } from 'mineflayer-pathfinder';
-import { Logger } from './Logger';
-import { Utils } from './Utils';
+import { Logger } from '../shared/Logger';
+import { Utils } from '../shared/Utils';
 import { Lava } from './Lava';
 import { Combat } from './Combat';
 import { Lighting } from './Lighting';
 import { Door } from './Door';
-import { wrap } from './result';
-import { LAVA_NAMES, FILLER_BLOCKS } from './constants';
+import { wrap } from '../shared/result';
+import { LAVA_NAMES, FILLER_BLOCKS } from '../shared/constants';
 
 const UNBREAKABLE = new Set([
   'bedrock',

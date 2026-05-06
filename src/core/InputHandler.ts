@@ -1,9 +1,9 @@
 import * as readline from 'node:readline';
 import { Vec3 } from 'vec3';
-import { Logger } from './Logger';
-import type { ModeController } from './modes/ModeController';
-import type { AutoMode } from './modes/AutoMode';
-import type { GuidedMode } from './modes/GuidedMode';
+import { Logger } from '../shared/Logger';
+import type { ModeController } from '../modes/ModeController';
+import type { AutoMode } from '../modes/AutoMode';
+import type { GuidedMode } from '../modes/GuidedMode';
 
 export class InputHandler {
   private readonly log = new Logger('InputHandler');

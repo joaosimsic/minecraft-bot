@@ -2,9 +2,9 @@ import type { Bot } from 'mineflayer';
 import type { Block } from 'prismarine-block';
 import { Vec3 } from 'vec3';
 import mcData from 'minecraft-data';
-import { Logger } from './Logger';
-import { Utils } from './Utils';
-import { wrap } from './result';
+import { Logger } from '../shared/Logger';
+import { Utils } from '../shared/Utils';
+import { wrap } from '../shared/result';
 
 const CRAFTING_BLOCKS = new Set(['crafting_table', 'workbench']);
 const PLANK_NAMES = new Set(['planks', 'wood', 'oak_planks']);

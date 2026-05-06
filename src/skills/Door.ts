@@ -1,8 +1,8 @@
 import type { Bot } from 'mineflayer';
 import type { Block } from 'prismarine-block';
 import { Vec3 } from 'vec3';
-import { Logger } from './Logger';
-import { wrap } from './result';
+import { Logger } from '../shared/Logger';
+import { wrap } from '../shared/result';
 
 interface BlockWithProps extends Block {
   properties?: Record<string, string | boolean>;

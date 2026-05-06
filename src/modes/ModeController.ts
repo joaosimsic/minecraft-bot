@@ -1,4 +1,4 @@
-import { Logger } from '../Logger';
+import { Logger } from '../shared/Logger';
 import type { BotMode } from './BotMode';
 import { IdleMode } from './IdleMode';
 

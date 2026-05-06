@@ -1,9 +1,9 @@
 import type { Bot } from 'mineflayer';
 import type { Block } from 'prismarine-block';
 import { Vec3 } from 'vec3';
-import { Logger } from './Logger';
-import { Utils } from './Utils';
-import { wrap } from './result';
+import { Logger } from '../shared/Logger';
+import { Utils } from '../shared/Utils';
+import { wrap } from '../shared/result';
 
 type Want = { name: string; count: number };
 

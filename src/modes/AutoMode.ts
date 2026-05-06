@@ -1,8 +1,8 @@
 import type { BotMode } from './BotMode';
-import type { Mine } from '../Mine';
-import type { Craft } from '../Craft';
-import type { Chest } from '../Chest';
-import { state } from '../state';
+import type { Mine } from '../skills/Mine';
+import type { Craft } from '../skills/Craft';
+import type { Chest } from '../skills/Chest';
+import { state } from '../shared/state';
 
 export class AutoMode implements BotMode {
   public constructor(

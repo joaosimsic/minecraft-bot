@@ -2,10 +2,10 @@ import type { Bot } from 'mineflayer';
 import type { Pathfinder } from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { Movements, goals } from 'mineflayer-pathfinder';
-import { Logger } from './Logger';
-import { Door } from './Door';
-import { Utils } from './Utils';
-import { wrap } from './result';
+import { Logger } from '../shared/Logger';
+import { Door } from '../skills/Door';
+import { Utils } from '../shared/Utils';
+import { wrap } from '../shared/result';
 
 type PathfinderBot = Bot & { pathfinder: Pathfinder };
 type StepResult = 'reached' | 'timeout' | 'nopath';

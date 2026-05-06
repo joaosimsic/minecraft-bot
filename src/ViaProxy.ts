@@ -47,14 +47,15 @@ export class ViaProxy {
     if (!existsSync(PROXY_DIR)) mkdirSync(PROXY_DIR, { recursive: true });
 
     const url = `https://github.com/ViaVersion/ViaProxy/releases/download/v${JAR_VER}/${JAR_NAME}`;
-
     this.log.info('downloading', url);
 
-    const res = await fetch(url);
+    const proc = Bun.spawn(['curl', '-fsSL', '-o', JAR_PATH, url], {
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+    await proc.exited;
 
-    if (!res.ok) throw new Error(`download failed: ${res.status}`);
-
-    await Bun.write(JAR_PATH, res);
+    if (proc.exitCode !== 0) throw new Error(`download failed: curl exited ${proc.exitCode}`);
 
     this.log.info('downloaded', JAR_PATH);
   }
@@ -108,7 +109,7 @@ export class ViaProxy {
 
     this.log.info('spawning java', args.slice(2).join(' '));
 
-    this.proc = Bun.spawn(['java', ...args], {
+    this.proc = Bun.spawn(['java', '-jar', JAR_PATH, 'cli', ...args], {
       cwd: PROXY_DIR,
       stdout: 'inherit',
       stderr: 'inherit',

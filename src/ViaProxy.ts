@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { connect } from 'node:net';
-import { Logger } from '../Logger';
-import { JAR_NAME, JAR_VER, JAR_PATH, PROXY_DIR } from './constants';
+import { join } from 'node:path';
+import { config } from './config';
+import { Logger } from './Logger';
+
+const JAR_VER = config.env.VIAPROXY_VERSION;
+const JAR_NAME = `ViaProxy-${JAR_VER}.jar`;
+const PROXY_DIR = join(process.cwd(), '.viaproxy');
+const JAR_PATH = join(PROXY_DIR, JAR_NAME);
 
 export class ViaProxy {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -108,10 +114,7 @@ export class ViaProxy {
       stderr: 'inherit',
     });
 
-    let exited = false;
-
     this.proc.exited.then(() => {
-      exited = true;
       this.log.info('exited code', this.proc?.exitCode);
     });
 

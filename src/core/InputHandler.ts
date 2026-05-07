@@ -24,6 +24,8 @@ export class InputHandler {
 
   private handleLine(line: string): void {
     const parts = line.split(/\s+/);
+    const head = parts[0] ?? '';
+    this.log.event('command', { line });
 
     const commands: Record<string, () => void> = {
       auto:   () => this.controller.switchTo(this.autoMode),
@@ -39,7 +41,7 @@ export class InputHandler {
       },
     };
 
-    const cmd = commands[parts[0] ?? ''];
+    const cmd = commands[head];
     if (cmd !== undefined) {
       cmd();
       return;

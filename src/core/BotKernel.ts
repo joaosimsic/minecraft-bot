@@ -8,6 +8,8 @@ import { Navigator } from '../skills/Navigator';
 import { AutoMode } from '../modes/AutoMode';
 import { GuidedMode } from '../modes/GuidedMode';
 import { ModeController } from './ModeController';
+import { Telemetry } from './Telemetry';
+import { config } from '../config';
 
 export class BotKernel {
   public readonly bot: Bot;
@@ -20,6 +22,7 @@ export class BotKernel {
   public readonly guidedMode: GuidedMode;
   public readonly controller: ModeController;
   public readonly input: InputHandler;
+  public readonly telemetry: Telemetry;
 
   public constructor(bot: Bot) {
     this.bot = bot;
@@ -29,8 +32,16 @@ export class BotKernel {
     this.craft = new Craft(bot);
     this.chest = new Chest(bot);
     this.autoMode = new AutoMode(this.mine, this.craft, this.chest);
-    this.guidedMode = new GuidedMode(this.navigator);
+    this.guidedMode = new GuidedMode(this.navigator, config.env.goal);
     this.controller = new ModeController();
     this.input = new InputHandler(this.bot, this.controller, this.autoMode, this.guidedMode);
+    this.telemetry = new Telemetry(
+      this.bot,
+      config.env.LOG_SAMPLE_MS,
+      config.env.LOG_STATS_MS,
+      config.env.LOG_TRAIL_MIN_BLOCKS,
+    );
+    this.telemetry.start();
+    this.bot.on('spawn', () => this.guidedMode.onRespawn());
   }
 }

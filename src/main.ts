@@ -3,6 +3,7 @@ import { pathfinder } from 'mineflayer-pathfinder';
 import { config } from './config';
 import { ViaProxy } from './infra/ViaProxy';
 import { Logger } from './shared/Logger';
+import { sink } from './shared/Sink';
 import { BotKernel } from './core/BotKernel';
 import type { AsyncResult } from './shared/result';
 import { okVoid, wrap } from './shared/result';
@@ -45,6 +46,13 @@ class BotRunner {
   }
 
   public async run(): AsyncResult<null> {
+    const [sinkErr] = await sink.open(config.env.LOG_DIR);
+    if (sinkErr) log.error('sink open failed', sinkErr.message);
+    if (!sinkErr) {
+      const p = sink.paths();
+      log.info('logs ->', p.text, '|', p.jsonl);
+    }
+
     if (this.shouldUseProxy()) {
       const [e] = await this.startProxy();
       if (e) return [e, null];
@@ -56,6 +64,7 @@ class BotRunner {
     const kernel = new BotKernel(bot);
 
     if (config.env.MODE === 'auto') kernel.controller.switchTo(kernel.autoMode);
+    if (config.env.MODE === 'guided') kernel.controller.switchTo(kernel.guidedMode);
 
     bot.once('spawn', () => {
       log.info('spawned — commands: auto | guided | stop | exit | <x> <y> <z>');
@@ -70,7 +79,9 @@ class BotRunner {
       log.info('disconnected');
       kernel.controller.halt();
       kernel.input.close();
+      kernel.telemetry.stop();
       this.proxy?.stop();
+      sink.close();
     });
 
     return okVoid();

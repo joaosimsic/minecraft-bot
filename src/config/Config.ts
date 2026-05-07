@@ -9,7 +9,7 @@ if (!result.success) {
   process.exit(1);
 }
 
-const { START_X, START_Y, START_Z, ...rest } = result.data;
+const { START_X, START_Y, START_Z, GOAL_X, GOAL_Y, GOAL_Z, ...rest } = result.data;
 
 export const config = {
   env: {
@@ -17,6 +17,10 @@ export const config = {
     home:
       START_X !== undefined && START_Y !== undefined && START_Z !== undefined
         ? new Vec3(START_X, START_Y, START_Z)
+        : null,
+    goal:
+      GOAL_X !== undefined && GOAL_Y !== undefined && GOAL_Z !== undefined
+        ? new Vec3(GOAL_X, GOAL_Y, GOAL_Z)
         : null,
   },
 };

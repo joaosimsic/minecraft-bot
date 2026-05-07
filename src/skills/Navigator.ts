@@ -6,15 +6,17 @@ import { Logger } from '../shared/Logger';
 import { Door } from './Door';
 import { Utils } from '../shared/Utils';
 import { wrap } from '../shared/result';
+import { metrics } from '../shared/Metrics';
 
 type PathfinderBot = Bot & { pathfinder: Pathfinder };
 type StepResult = 'reached' | 'timeout' | 'nopath';
 
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 1;
 
 export class Navigator {
   private readonly log = new Logger('Navigator');
   private readonly pbot: PathfinderBot;
+  private readonly badNodes = new Set<string>();
 
   public constructor(
     bot: Bot,
@@ -23,21 +25,50 @@ export class Navigator {
     this.pbot = bot as PathfinderBot;
   }
 
+  private static centerBlock(v: Vec3): Vec3 {
+    return new Vec3(Math.floor(v.x) + 0.5, v.y, Math.floor(v.z) + 0.5);
+  }
+
   public async walkTo(target: Vec3, range = 1): Promise<boolean> {
-    if (this.pbot.entity.position.distanceTo(target) <= range) return true;
+    this.badNodes.clear();
+    target = Navigator.centerBlock(target);
 
-    const moves = this.buildMovements();
+    const start = this.pbot.entity.position;
+    metrics.inc('walk.start');
+    this.log.event('walk_start', {
+      target: { x: target.x, y: target.y, z: target.z },
+      from: { x: +start.x.toFixed(2), y: +start.y.toFixed(2), z: +start.z.toFixed(2) },
+      range,
+    });
+    this.log.decision('walk', 'request', {
+      target: { x: target.x, y: target.y, z: target.z },
+      range,
+      dist: +start.distanceTo(target).toFixed(2),
+    });
 
-    if (!this.isGoalReachable(target, moves)) {
-      this.log.warn('goal is unreachable, skipping pathfinding');
-      return false;
+    if (start.distanceTo(target) <= range) {
+      metrics.inc('walk.already_there');
+      this.log.decision('walk_skip', 'already_in_range');
+      this.log.event('walk_end', { ok: true, mode: 'already_there' });
+      return true;
     }
+
+    this.buildMovements();
 
     const reached = await this.iterativePathfind(target, range);
 
-    if (reached) return true;
+    if (reached) {
+      metrics.inc('walk.pathfind.success');
+      this.log.event('walk_end', { ok: true, mode: 'pathfind' });
+      return true;
+    }
 
-    return this.manualWalkTo(target);
+    metrics.inc('walk.pathfind.fail');
+    this.log.decision('walk_fallback', 'pathfind_failed_try_manual');
+    const manual = await this.manualWalkTo(target);
+    metrics.inc(manual ? 'walk.manual.success' : 'walk.manual.fail');
+    this.log.event('walk_end', { ok: manual, mode: 'manual' });
+    return manual;
   }
 
   private buildMovements(): Movements {
@@ -46,25 +77,37 @@ export class Navigator {
     moves.canDig = false;
     moves.allow1by1towers = false;
     moves.canOpenDoors = true;
+    moves.allowSprinting = false;
+
+    const originalGetBlock = moves.getBlock.bind(moves);
+    type SafeBlock = ReturnType<typeof originalGetBlock>;
+
+    moves.getBlock = (
+      pos: Vec3,
+      dx: number,
+      dy: number,
+      dz: number,
+    ): SafeBlock => {
+      const block = originalGetBlock(pos, dx, dy, dz);
+      const key = `${pos.x},${pos.y},${pos.z}`;
+
+      if (this.badNodes.has(key)) {
+        return Object.assign({}, block, {
+          boundingBox: 'block',
+          name: 'barrier',
+          safe: false,
+          safe2D: false,
+          physical: true,
+        }) as SafeBlock;
+      }
+
+      return block;
+    };
 
     this.pbot.pathfinder.setMovements(moves);
 
     return moves;
   }
-
-  private isGoalReachable(target: Vec3, moves: Movements): boolean {
-    const botPos = this.pbot.entity.position;
-    const targetGoal = new goals.GoalNear(target.x, target.y, target.z, 1);
-
-    const iter = this.pbot.pathfinder.getPathFromTo(moves, botPos, targetGoal, {
-      timeout: 3000,
-    });
-
-    const { value } = iter.next();
-
-    return value.result.status !== 'noPath';
-  }
-
   private async iterativePathfind(
     target: Vec3,
     range: number,
@@ -79,22 +122,33 @@ export class Navigator {
         `(${target.x}, ${target.y}, ${target.z})`,
       );
 
+      metrics.inc('path.attempt');
+      this.log.event('pathfind_attempt', { attempt: attempts + 1, target });
       const step = await this.stepToward(target, range);
+      metrics.inc(`path.result.${step}`);
+      this.log.event('pathfind_result', { attempt: attempts + 1, result: step });
 
       if (step === 'reached') return true;
-      if (step === 'nopath') return false;
+      if (step === 'nopath') {
+        this.log.decision('pathfind_abort', 'no_path_to_goal', { attempt: attempts + 1 });
+        return false;
+      }
+
+      const stuckPos = this.pbot.entity.position.floored();
+      const yaw = this.pbot.entity.yaw;
+      const frontX = stuckPos.x + Math.round(-Math.sin(yaw));
+      const frontZ = stuckPos.z + Math.round(-Math.cos(yaw));
+      this.badNodes.add(`${frontX},${stuckPos.y},${frontZ}`);
+      metrics.inc('bad_node');
+      this.log.decision('mark_bad_node', 'pathfind_timeout', { x: frontX, y: stuckPos.y, z: frontZ });
+      this.log.event('mark_bad_node', { x: frontX, y: stuckPos.y, z: frontZ });
 
       attempts++;
 
       if (attempts >= MAX_ATTEMPTS) break;
 
       await this.unstick(target);
-
-      const moves = this.buildMovements();
-      if (!this.isGoalReachable(target, moves)) {
-        this.log.warn('goal no longer reachable after unstick');
-        return false;
-      }
+      this.buildMovements();
     }
 
     this.log.warn('exhausted pathfinding attempts');
@@ -104,6 +158,13 @@ export class Navigator {
 
   private async unstick(target: Vec3): Promise<void> {
     this.log.info('unsticking safely');
+    const p = this.pbot.entity.position;
+    metrics.inc('unstick');
+    this.log.event('unstick', {
+      pos: { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2) },
+      yaw: +this.pbot.entity.yaw.toFixed(2),
+    });
+    this.log.decision('unstick', 'pathfind_attempt_failed');
 
     const pos = this.pbot.entity.position;
     const yaw = this.pbot.entity.yaw;
@@ -181,16 +242,24 @@ export class Navigator {
 
   private async manualWalkTo(target: Vec3): Promise<boolean> {
     this.log.info('manual walk to', `(${target.x}, ${target.y}, ${target.z})`);
+    this.log.event('manual_walk_start', { target });
     const start = Date.now();
 
+    let lastPos = this.pbot.entity.position.clone();
+    let stalledTicks = 0;
+    let iter = 0;
+
     while (Date.now() - start < 15000) {
+      iter++;
       const pos = this.pbot.entity.position;
       const dx = target.x - pos.x;
       const dz = target.z - pos.z;
+      const dy = target.y - pos.y;
 
-      if (dx * dx + dz * dz < 0.25 && Math.abs(target.y - pos.y) < 1) {
+      if (dx * dx + dz * dz < 0.25 && Math.abs(dy) < 1) {
         this.pbot.setControlState('forward', false);
         this.pbot.setControlState('jump', false);
+        this.log.event('manual_walk_end', { ok: true, iter, reason: 'reached' });
         return true;
       }
 
@@ -208,8 +277,9 @@ export class Navigator {
         Math.floor(pos.z + fdz),
       );
       const frontBlock = this.pbot.blockAt(frontPos);
+      const frontIsDoor = frontBlock !== null && this.door.isDoor(frontBlock.name);
 
-      if (frontBlock && this.door.isDoor(frontBlock.name)) {
+      if (frontIsDoor) {
         const [realignErr] = await wrap(
           this.pbot.lookAt(
             new Vec3(frontPos.x + 0.5, pos.y + 1.6, frontPos.z + 0.5),
@@ -223,23 +293,60 @@ export class Navigator {
 
       this.pbot.setControlState('forward', true);
 
+      const sideX = Math.floor(pos.x + Math.sign(dx) * 0.5);
+      const sideZ = Math.floor(pos.z + Math.sign(dz) * 0.5);
       const front = this.pbot.blockAt(
-        new Vec3(
-          Math.floor(pos.x + Math.sign(dx) * 0.5),
-          Math.floor(pos.y),
-          Math.floor(pos.z + Math.sign(dz) * 0.5),
-        ),
+        new Vec3(sideX, Math.floor(pos.y), sideZ),
       );
-      this.pbot.setControlState(
-        'jump',
-        front !== null && front.name !== 'air' && !this.door.isDoor(front.name),
-      );
+      const shouldJump =
+        front !== null && front.name !== 'air' && !this.door.isDoor(front.name);
+      this.pbot.setControlState('jump', shouldJump);
+
+      const moved = pos.distanceTo(lastPos);
+      if (moved < 0.05) stalledTicks++;
+      if (moved >= 0.05) stalledTicks = 0;
+      lastPos = pos.clone();
+
+      const v = this.pbot.entity.velocity;
+
+      this.log.event('manual_walk_tick', {
+        iter,
+        pos: { x: +pos.x.toFixed(2), y: +pos.y.toFixed(2), z: +pos.z.toFixed(2) },
+        target: { x: target.x, y: target.y, z: target.z },
+        delta: { dx: +dx.toFixed(2), dy: +dy.toFixed(2), dz: +dz.toFixed(2) },
+        yaw: +yaw.toFixed(3),
+        front: {
+          pos: { x: frontPos.x, y: frontPos.y, z: frontPos.z },
+          name: frontBlock?.name ?? null,
+          isDoor: frontIsDoor,
+        },
+        side: {
+          pos: { x: sideX, y: Math.floor(pos.y), z: sideZ },
+          name: front?.name ?? null,
+        },
+        controls: { forward: true, jump: shouldJump },
+        velocity: { x: +v.x.toFixed(3), y: +v.y.toFixed(3), z: +v.z.toFixed(3) },
+        moved: +moved.toFixed(3),
+        stalledTicks,
+        onGround: this.pbot.entity.onGround,
+      });
+
+      if (stalledTicks >= 6) {
+        metrics.inc('manual_walk.stalled');
+        this.log.warn('manual walk stalled');
+        this.log.event('manual_walk_stalled', {
+          iter, stalledTicks,
+          pos: { x: +pos.x.toFixed(2), y: +pos.y.toFixed(2), z: +pos.z.toFixed(2) },
+          front: { name: frontBlock?.name ?? null, isDoor: frontIsDoor },
+        });
+      }
 
       await Utils.sleep(250);
     }
 
     this.pbot.setControlState('forward', false);
     this.pbot.setControlState('jump', false);
+    this.log.event('manual_walk_end', { ok: false, iter, reason: 'timeout' });
     return false;
   }
 }

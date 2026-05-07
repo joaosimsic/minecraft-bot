@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'node:fs';
-import { connect } from 'node:net';
+import { connect, createServer } from 'node:net';
 import { join } from 'node:path';
 import { config } from '../config';
 import { Logger } from '../shared/Logger';
@@ -17,6 +17,38 @@ const stripAnsi = (s: string): string => s.replace(ANSI_ESCAPE, '');
 export class ViaProxy {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private readonly log = new Logger('viaproxy');
+
+  public static allocateLocalPort(): AsyncResult<number> {
+    return new Promise((resolve): void => {
+      const s = createServer();
+      const onErr = (err: Error): void => {
+        s.removeAllListeners();
+        resolve([err, null]);
+      };
+
+      s.once('error', onErr);
+      s.listen(0, '127.0.0.1', (): void => {
+        s.removeListener('error', onErr);
+        const addr = s.address();
+        if (addr === null || typeof addr === 'string') {
+          s.close((): void => {
+            resolve([new Error('listen address unavailable'), null]);
+          });
+          return;
+        }
+
+        const port = addr.port;
+        s.close((err?: Error): void => {
+          if (err) {
+            resolve([err, null]);
+            return;
+          }
+
+          resolve([null, port]);
+        });
+      });
+    });
+  }
 
   private static pumpStream(
     stream: ReadableStream<Uint8Array> | undefined,

@@ -21,6 +21,7 @@ const log = new Logger('main');
 
 class BotRunner {
   private proxy: ViaProxy | null = null;
+  private viaproxyListenPort = 0;
   private readonly fleet = new BotFleet();
   private readonly macros = new MacroStore();
   private ui: UIManager | null = null;
@@ -39,8 +40,18 @@ class BotRunner {
 
   private async startProxy(): AsyncResult<null> {
     const { HOST, PORT, VERSION, VIAPROXY_PORT } = config.env;
+    let bindPort = VIAPROXY_PORT;
+    if (bindPort === 0) {
+      const [e0, p] = await ViaProxy.allocateLocalPort();
+      if (e0) return [e0, null];
+      if (p === null)
+        return [new Error('allocateLocalPort returned no port'), null];
+      bindPort = p;
+    }
+
+    this.viaproxyListenPort = bindPort;
     this.proxy = new ViaProxy({
-      bindPort: VIAPROXY_PORT,
+      bindPort,
       targetHost: HOST,
       targetPort: PORT,
       targetVersion: VERSION,
@@ -49,13 +60,12 @@ class BotRunner {
   }
 
   private createBot(username: string): mineflayer.Bot {
-    const { HOST, PORT, VERSION, VIAPROXY_PORT, CLIENT_VERSION, AUTH } =
-      config.env;
+    const { HOST, PORT, VERSION, CLIENT_VERSION, AUTH } = config.env;
     const useProxy = this.proxy !== null;
 
     return mineflayer.createBot({
       host: useProxy ? '127.0.0.1' : HOST,
-      port: useProxy ? VIAPROXY_PORT : PORT,
+      port: useProxy ? this.viaproxyListenPort : PORT,
       version: useProxy ? CLIENT_VERSION : VERSION,
       username,
       auth: AUTH,

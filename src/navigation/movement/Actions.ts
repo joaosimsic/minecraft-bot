@@ -15,7 +15,7 @@ export type NavigationAction =
   | InteractAction;
 
 export class WalkAction {
-  public readonly kind: 'walk' = 'walk';
+  public readonly kind = 'walk' as const;
 
   public constructor(
     public readonly actionId: string,
@@ -38,7 +38,7 @@ export class WalkAction {
 }
 
 export class JumpUpAction {
-  public readonly kind: 'jump_up' = 'jump_up';
+  public readonly kind = 'jump_up' as const;
 
   public constructor(
     public readonly actionId: string,
@@ -61,7 +61,7 @@ export class JumpUpAction {
 }
 
 export class DropDownAction {
-  public readonly kind: 'drop_down' = 'drop_down';
+  public readonly kind = 'drop_down' as const;
 
   public constructor(
     public readonly actionId: string,
@@ -86,7 +86,7 @@ export class DropDownAction {
 }
 
 export class InteractAction {
-  public readonly kind: 'interact' = 'interact';
+  public readonly kind = 'interact' as const;
 
   public constructor(
     public readonly actionId: string,

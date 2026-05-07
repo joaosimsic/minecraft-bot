@@ -5,11 +5,15 @@
   "private": true,
   "scripts": {
     "s": "bun src/main.ts",
-    "test": "bun --env-file=.env.example test"
+    "test": "bun --env-file=.env.example test",
+    "lint": "eslint . --max-warnings 0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/blessed": "^0.1.27",
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "eslint": "^10.3.0",
+    "typescript-eslint": "^8.59.2"
   },
   "peerDependencies": {
     "typescript": "^5"

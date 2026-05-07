@@ -32,14 +32,24 @@ export class BotFleet {
   private readonly phaseById = new Map<string, BotPhase>();
   private readonly lastErrorById = new Map<string, string | null>();
   private focusedBotId = '';
-  private statusRefresh: () => void = (): void => undefined;
+  private statusRefreshCb: () => void = (): void => undefined;
+  private statusRefreshScheduled = false;
 
   public setStatusRefresh(fn: () => void): void {
-    this.statusRefresh = fn;
+    this.statusRefreshCb = fn;
   }
 
   public touchStatus(): void {
     this.statusRefresh();
+  }
+
+  private statusRefresh(): void {
+    if (this.statusRefreshScheduled) return;
+    this.statusRefreshScheduled = true;
+    queueMicrotask((): void => {
+      this.statusRefreshScheduled = false;
+      this.statusRefreshCb();
+    });
   }
 
   public register(kernel: BotKernel): void {

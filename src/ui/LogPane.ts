@@ -5,6 +5,8 @@ import { LogStore, logLineMatchesDisplayFilters } from './LogStore';
 import type { ScreenFrame } from './ScreenFrame';
 
 const MULTI_LOG_LINE_CAP = 20;
+const MAX_LOG_LINES_PER_UI_TICK = 512;
+const LOG_SCROLLBACK = 2500;
 
 type LogTabCmd = {
   prefix: string;
@@ -30,6 +32,10 @@ export class LogPane {
   private multiLogColumns: blessed.Widgets.BoxElement[] = [];
   private multiLayoutKey = '';
   private lastOnlineBotIds: string[] = [];
+  private readonly pendingVisible: UiLogLine[] = [];
+  private logFlushScheduled = false;
+  private multiDirty = false;
+  private logFlushSeq = 0;
 
   public constructor(frame: ScreenFrame, onQuit: () => void) {
     this.frame = frame;
@@ -78,12 +84,15 @@ export class LogPane {
       mouse: true,
       keys: true,
       vi: true,
+      scrollback: LOG_SCROLLBACK,
       scrollbar: {
         ch: ' ',
         track: { bg: 'cyan' },
         style: { inverse: true },
       },
     });
+
+    this.logBox.removeAllListeners('set content');
 
     this.logBox.on('scroll', (): void => {
       this.logFollowBottom = this.logBox.getScrollPerc() >= 99;
@@ -125,20 +134,17 @@ export class LogPane {
   public appendLogLine(line: UiLogLine): void {
     this.logStore.append(line);
     if (this.multiLogMode) {
-      this.fillMultiColumnContents(this.lastOnlineBotIds);
-      this.scheduleRender();
+      this.multiDirty = true;
+      this.scheduleLogFlush();
       return;
     }
     if (
       !logLineMatchesDisplayFilters(line, this.logFilterBotId, this.logMinLevel)
     ) {
-      this.scheduleRender();
       return;
     }
-    const id = line.botId === null ? '—' : line.botId;
-    this.logBox.add(`[${id}] ${line.text}`);
-    if (this.logFollowBottom) this.logBox.setScrollPerc(100);
-    this.scheduleRender();
+    this.pendingVisible.push(line);
+    this.scheduleLogFlush();
   }
 
   public toggleMultiLogMode(): void {
@@ -151,6 +157,9 @@ export class LogPane {
       this.scheduleRender();
       return;
     }
+
+    this.clearLogFlushSchedule();
+
     this.multiLayoutKey = '';
     this.rebuildMultiColumnWidgets(this.lastOnlineBotIds);
     this.multiLayoutKey = this.lastOnlineBotIds.join('\0');
@@ -289,7 +298,58 @@ export class LogPane {
     }
   }
 
+  private clearLogFlushSchedule(): void {
+    this.pendingVisible.length = 0;
+    this.multiDirty = false;
+    this.logFlushScheduled = false;
+    this.logFlushSeq += 1;
+  }
+
+  private scheduleLogFlush(): void {
+    if (this.logFlushScheduled) return;
+    this.logFlushScheduled = true;
+    const seq = this.logFlushSeq;
+    setImmediate((): void => {
+      if (seq !== this.logFlushSeq) {
+        this.logFlushScheduled = false;
+        return;
+      }
+      this.flushLogPending();
+    });
+  }
+
+  private flushLogPending(): void {
+    this.logFlushScheduled = false;
+    if (this.multiLogMode) {
+      if (!this.multiDirty) return;
+      this.multiDirty = false;
+      this.fillMultiColumnContents(this.lastOnlineBotIds);
+      this.scheduleRender();
+      return;
+    }
+    if (this.pendingVisible.length === 0) return;
+
+    const taken = this.pendingVisible.splice(0, MAX_LOG_LINES_PER_UI_TICK);
+    const existing = this.logBox.getLines();
+    const merged: string[] =
+      existing.length === 1 && existing[0] === '' ? [] : existing.slice();
+
+    for (const line of taken) merged.push(this.formatLogLine(line));
+
+    if (merged.length > LOG_SCROLLBACK) {
+      merged.splice(0, merged.length - LOG_SCROLLBACK);
+    }
+
+    this.logBox.setContent(merged.join('\n'));
+
+    if (this.logFollowBottom) this.logBox.setScrollPerc(100);
+    this.scheduleRender();
+
+    if (this.pendingVisible.length > 0) this.scheduleLogFlush();
+  }
+
   private refillLogFromStore(): void {
+    this.clearLogFlushSchedule();
     if (this.multiLogMode) {
       this.fillMultiColumnContents(this.lastOnlineBotIds);
       this.scheduleRender();

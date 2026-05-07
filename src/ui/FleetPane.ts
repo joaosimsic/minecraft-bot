@@ -14,7 +14,11 @@ export class FleetPane {
   private fleetRowIds: string[] = [];
   private lastFleetOrder: string[] = [];
   private lastMiniMapKey = '';
-  private lastStatusKey = '';
+  private lastFocusedKey = '';
+  private lastTableKey = '';
+  private lastSelectedIdx = -1;
+  private lastFooterText = '';
+  private suppressSelectEvent = false;
 
   public get lastFleetOrderSnapshot(): string[] {
     return this.lastFleetOrder;
@@ -103,6 +107,7 @@ export class FleetPane {
     this.fleetTable.on(
       'select item',
       (_el: blessed.Widgets.BoxElement, index: number): void => {
+        if (this.suppressSelectEvent) return;
         const id = this.fleetRowIds[index];
         if (id === undefined) return;
         this.onFleetRowSelect(id);
@@ -136,7 +141,11 @@ export class FleetPane {
             `tel: ${focused.telemetryLine}`,
             `err: ${focused.lastError ?? '—'}`,
           ].filter((line): line is string => line !== null);
-    this.focusedBox.setContent(focusLines.join('\n'));
+    const focusedText = focusLines.join('\n');
+    if (focusedText !== this.lastFocusedKey) {
+      this.lastFocusedKey = focusedText;
+      this.focusedBox.setContent(focusedText);
+    }
 
     const mapBots: MiniMapBot[] = [];
     for (const r of fleet) {
@@ -171,11 +180,23 @@ export class FleetPane {
       const err = r.lastError === null ? '—' : r.lastError.slice(0, 24);
       return [r.botId, on, r.phase, r.modeLabel, pos, err];
     });
-    this.fleetTable.setData([header, ...rows]);
 
+    const tableKey = rows.map((r): string => r.join('\x1f')).join('\x1e');
     const sel =
       focusedId.length === 0 ? -1 : this.fleetRowIds.indexOf(focusedId);
-    if (sel >= 0) this.fleetTable.select(sel);
+    const tableChanged = tableKey !== this.lastTableKey;
+    const selChanged = sel !== this.lastSelectedIdx;
+
+    if (tableChanged || selChanged) {
+      this.suppressSelectEvent = true;
+      if (tableChanged) {
+        this.lastTableKey = tableKey;
+        this.fleetTable.setData([header, ...rows]);
+      }
+      if (sel >= 0 && selChanged) this.fleetTable.select(sel);
+      this.lastSelectedIdx = sel;
+      this.suppressSelectEvent = false;
+    }
 
     const onlineIds = fleet
       .filter((r): boolean => r.online)
@@ -187,14 +208,10 @@ export class FleetPane {
 
     setInputFocusLabel(fid);
 
-    const nextKey = `${fid}\n${mode}\n${online}\n${total}\n${focusLines.join('|')}\n${rows.join(';')}`;
-    if (nextKey !== this.lastStatusKey) {
-      this.lastStatusKey = nextKey;
-      this.footer.setContent(
-        ` focus: ${fid} | mode: ${mode} | bots: ${online}/${total} online | log tabs · F1 · F2 · ^K · Tab · ^C `,
-      );
-      this.scheduleRender();
-      return;
+    const footerText = ` focus: ${fid} | mode: ${mode} | bots: ${online}/${total} online | log tabs · F1 · F2 · ^K · Tab · ^C `;
+    if (footerText !== this.lastFooterText) {
+      this.lastFooterText = footerText;
+      this.footer.setContent(footerText);
     }
     this.scheduleRender();
   }

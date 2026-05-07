@@ -122,6 +122,24 @@ class BotRunner {
     return { x: h.x, z: h.z };
   }
 
+  private mountUiShell(): void {
+    if (this.ui !== null) return;
+    this.ui = new UIManager(
+      (): void => this.shutdown(),
+      (): string[] => this.fleet.allRegisteredIds(),
+      (): string[] => this.macros.names(),
+      this.uiBus,
+    );
+
+    installLogUiOutlet(this.logOutlet);
+    this.logOutlet.attach((line): void => {
+      this.uiBus.emitLog(line);
+    });
+
+    this.attachWebCompanion();
+    this.ui.render();
+  }
+
   private async runReplay(path: string): AsyncResult<null> {
     const state = new ReplayState();
     const pulse = (): void => {
@@ -190,24 +208,19 @@ class BotRunner {
     const replayPath = config.env.REPLAY_JSONL;
     if (replayPath !== undefined) return this.runReplay(replayPath);
 
-    if (this.shouldUseProxy()) {
+    const useProxy = this.shouldUseProxy();
+    if (useProxy) {
+      this.mountUiShell();
+      log.info('Starting ViaProxy…');
       const [e] = await this.startProxy();
       if (e) return [e, null];
     }
+    if (!useProxy) {
+      this.mountUiShell();
+    }
 
-    this.ui = new UIManager(
-      () => this.shutdown(),
-      (): string[] => this.fleet.allRegisteredIds(),
-      (): string[] => this.macros.names(),
-      this.uiBus,
-    );
-
-    installLogUiOutlet(this.logOutlet);
-    this.logOutlet.attach((line): void => {
-      this.uiBus.emitLog(line);
-    });
-
-    this.attachWebCompanion();
+    const ui = this.ui;
+    if (ui === null) return [new Error('UI failed to mount'), null];
 
     const [sinkErr] = await sink.open(config.env.LOG_DIR);
     if (sinkErr) log.error('sink open failed', sinkErr.message);
@@ -238,14 +251,14 @@ class BotRunner {
       this.fleet,
       toUi,
       () => this.shutdown(),
-      this.ui,
+      ui,
       this.macros,
     );
-    this.ui.onFleetFocus((id): void => {
+    ui.onFleetFocus((id): void => {
       this.fleet.setFocus(id);
     });
-    this.ui.onSubmit((line): void => input.handleLine(line));
-    this.ui.render();
+    ui.onSubmit((line): void => input.handleLine(line));
+    ui.render();
 
     for (const username of config.env.usernames) {
       const bot = this.createBot(username);

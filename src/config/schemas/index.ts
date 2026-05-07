@@ -5,7 +5,9 @@ import { serverSchema } from './server';
 
 export const envSchema = z.object({
   ...botSchema,
+
   ...proxySchema,
+
   ...serverSchema,
 });
 

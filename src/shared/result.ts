@@ -5,6 +5,7 @@ export type AsyncResult<T> = Promise<Result<T>>;
 export async function wrap<T>(p: Promise<T>): AsyncResult<T> {
   return p.then(
     (v): Result<T> => [null, v],
+
     (e): Result<T> => {
       const err = e instanceof Error ? e : new Error(String(e));
       return [err, null];

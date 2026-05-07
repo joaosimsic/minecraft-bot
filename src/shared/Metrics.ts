@@ -45,6 +45,7 @@ class Metrics {
 
   public summary(): MetricsSnapshot {
     const last = this.trail.length > 0 ? this.trail[this.trail.length - 1]! : null;
+
     return {
       uptimeMs: this.uptimeMs(),
       counters: Object.fromEntries(this.counters),
@@ -59,6 +60,7 @@ class Metrics {
 
   public reset(): void {
     this.counters.clear();
+
     this.trail.length = 0;
   }
 }

@@ -32,11 +32,13 @@ export class GuidedMode implements BotMode {
       await Utils.sleep(1000);
       return;
     }
+
     const t = this.target ?? this.defaultGoal;
     if (t === null) {
       await Utils.sleep(1000);
       return;
     }
+
     const reached = await this.navigator.walkTo(t);
     if (!reached) {
       metrics.inc('target.failed');
@@ -45,6 +47,7 @@ export class GuidedMode implements BotMode {
       await Utils.sleep(5000);
       return;
     }
+
     metrics.inc('target.reached');
     this.log.decision('target_reached', 'walk_succeeded', { x: t.x, y: t.y, z: t.z });
     this.log.event('target_reached', { x: t.x, y: t.y, z: t.z });

@@ -6,8 +6,10 @@ const envBoolean = z
 
 export const proxySchema = {
   VIAPROXY_VERSION: z.string().min(1),
+
   VIAPROXY_PORT: z.coerce.number().min(1),
   CLIENT_VERSION: z.string().min(1),
+
   DISABLE_PROXY: envBoolean,
   FORCE_PROXY: envBoolean,
 };

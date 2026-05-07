@@ -24,9 +24,13 @@ export class Utils {
 
   public static pickaxeTier(name: string): number {
     if (name.includes('diamond')) return 4;
+
     if (name.includes('iron')) return 3;
+
     if (name.includes('stone')) return 2;
+
     if (name.includes('wood') || name.includes('wooden')) return 1;
+
     return 0;
   }
 
@@ -36,6 +40,7 @@ export class Utils {
     label: string,
   ): AsyncResult<T> {
     const settled = wrap(p);
+
     const timed = Utils.sleep(ms).then(
       (): Result<T> => [new Error(`timeout: ${label}`), null],
     );

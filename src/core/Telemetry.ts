@@ -1,9 +1,7 @@
 import type { Bot } from 'mineflayer';
-import type { Pathfinder } from 'mineflayer-pathfinder';
 import { Logger } from '../shared/Logger';
 import { metrics } from '../shared/Metrics';
 
-type PathfinderBot = Bot & { pathfinder?: Pathfinder };
 type EntityPos = Bot['entity']['position'];
 
 interface BotEntityExtras {
@@ -47,26 +45,34 @@ export class Telemetry {
       this.lastMovePos = e.position.clone();
       metrics.pushPos(+e.position.x.toFixed(2), +e.position.y.toFixed(2), +e.position.z.toFixed(2));
     });
+
     this.bot.on('death', (): void => {
       metrics.inc('deaths');
       this.log.event('death');
     });
+
     this.bot.on('kicked', (reason: string): void => {
       metrics.inc('kicks');
       this.log.event('kicked', { reason });
     });
+
     this.bot.on('end', (): void => this.log.event('disconnect'));
+
     this.bot.on('error', (e: Error): void =>
       this.log.event('bot_error', { msg: e.message }),
     );
+
     this.bot.on('health', (): void =>
       this.log.event('health', { hp: this.bot.health, food: this.bot.food }),
     );
+
     this.bot.on('chat', (user: string, msg: string): void => {
       metrics.inc('chats');
       this.log.event('chat', { user, msg });
     });
+
     this.bot.on('respawn', (): void => this.log.event('respawn'));
+
     this.bot.on('forcedMove', (): void => {
       const p = this.bot.entity.position;
       metrics.inc('forced_moves');
@@ -74,9 +80,8 @@ export class Telemetry {
         pos: { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2) },
       });
     });
-    this.bot.on('move', (): void => this.onMove());
 
-    this.bindPathfinder();
+    this.bot.on('move', (): void => this.onMove());
   }
 
   private onMove(): void {
@@ -168,35 +173,6 @@ export class Telemetry {
     });
   }
 
-  private bindPathfinder(): void {
-    const pb = this.bot as PathfinderBot;
-    if (!pb.pathfinder) return;
-
-    const pf = pb.pathfinder as unknown as {
-      on?: (ev: string, cb: (...a: unknown[]) => void) => void;
-    };
-    if (typeof pf.on !== 'function') return;
-
-    pf.on('path_update', (r: unknown): void => {
-      const res = r as { status?: string; cost?: number; path?: unknown[] };
-      metrics.inc(`path.update.${res?.status ?? 'unknown'}`);
-      this.log.event('path_update', {
-        status: res?.status ?? null,
-        cost: res?.cost ?? null,
-        nodes: Array.isArray(res?.path) ? res.path.length : null,
-      });
-    });
-    pf.on('goal_reached', (): void => {
-      metrics.inc('path.goal_reached');
-      this.log.event('pf_goal_reached');
-    });
-    pf.on('path_reset', (reason: unknown): void => {
-      metrics.inc('path.reset');
-      this.log.event('pf_path_reset', { reason: String(reason) });
-    });
-    pf.on('goal_updated', (): void => this.log.event('pf_goal_updated'));
-  }
-
   private snapshot(reason: string): void {
     const e = this.bot.entity as (typeof this.bot.entity) & BotEntityExtras;
     if (!e) return;
@@ -234,6 +210,7 @@ export class Telemetry {
     if (this.summaryTimer) clearInterval(this.summaryTimer);
     this.timer = null;
     this.summaryTimer = null;
+
     this.dumpSummary();
   }
 }

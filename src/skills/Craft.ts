@@ -41,11 +41,13 @@ export class Craft {
       this.log.warn('unknown item', name);
       return false;
     }
+
     const recipes = this.bot.recipesFor(id, null, count, table);
     if (!recipes.length) {
       this.log.warn('no recipe for', name, table ? '(table)' : '(2x2)');
       return false;
     }
+
     const [err] = await wrap(
       this.bot.craft(recipes[0]!, count, table ?? undefined),
     );
@@ -53,6 +55,7 @@ export class Craft {
       this.log.warn('failed', name, err.message);
       return false;
     }
+
     this.log.info('made', count, name);
     return true;
   }
@@ -131,9 +134,11 @@ export class Craft {
     if (!table) return false;
 
     await this.ensureSticks(2);
+
     if (Utils.countItem(this.bot, (n) => n === 'cobblestone') >= 3) {
       if (await this.doCraft('stone_pickaxe', 1, table)) return true;
     }
+
     await this.ensurePlanks(3);
     return this.doCraft('wooden_pickaxe', 1, table);
   }
@@ -146,15 +151,18 @@ export class Craft {
     if (!table) return false;
 
     await this.ensureSticks(1);
+
     if (Utils.countItem(this.bot, (n) => n === 'cobblestone') >= 2) {
       if (await this.doCraft('stone_sword', 1, table)) return true;
     }
+
     await this.ensurePlanks(2);
     return this.doCraft('wooden_sword', 1, table);
   }
 
   public async craftTorches(want = 16): Promise<boolean> {
     if (Utils.countItem(this.bot, (n) => n === 'torch') >= want) return true;
+
     if (Utils.countItem(this.bot, (n) => n === 'coal') < 1) {
       this.log.warn('no coal');
       return false;
@@ -168,6 +176,7 @@ export class Craft {
       .items()
       .find((i) => i.name.includes('pickaxe'));
     if (!pick || Utils.pickaxeTier(pick.name) < 1) await this.craftPickaxe();
+
     if (!this.bot.inventory.items().find((i) => i.name.includes('sword')))
       await this.craftSword();
   }

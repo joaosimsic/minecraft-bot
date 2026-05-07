@@ -15,6 +15,7 @@ export class ModeController {
     this.log.info('mode ->', to);
     this.log.decision('mode_switch', 'controller_request', { from, to });
     this.log.event('mode_switch', { from, to });
+
     this.currentMode = mode;
   }
 
@@ -23,6 +24,7 @@ export class ModeController {
     this.log.info('pausing');
     this.log.decision('mode_stop', 'controller_request', { from: this.currentMode.constructor.name });
     this.log.event('mode_stop', { from: this.currentMode.constructor.name });
+
     this.currentMode = new IdleMode();
   }
 

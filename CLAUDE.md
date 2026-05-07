@@ -18,3 +18,6 @@ I have the old/ folder on root that were pretty badly built, so I'm refactoring 
 3. All functions and methods must have an explicit return type
 4. Use Go-style explicit error handling. Functions/methods that can fail must return a tuple: `Promise<[Error | null, ReturnType | null]>` (or synchronous equivalent). 
 5. Always check for errors immediately after a function call (`if (err) return [err, null];`). Do not throw errors for control flow.
+6. No comments
+7. Apply vertical spacing between unrelated logic: leave blank lines so each coherent block stays grouped and dense runs of unrelated lines are avoided
+8. Run prettier to format files after changes

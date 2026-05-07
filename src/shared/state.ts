@@ -11,6 +11,7 @@ export interface BotState {
 export const state: BotState = {
   home: config.env.home,
   targetY: config.env.TARGET_Y,
+
   miningDir: new Vec3(1, 0, 0),
   busy: false,
 };

@@ -60,14 +60,17 @@ export class InputHandler {
 
   private parseCoords(parts: string[]): Vec3 | null {
     if (parts.length < 3) return null;
+
     const a = parts[0];
     const b = parts[1];
     const c = parts[2];
     if (a === undefined || b === undefined || c === undefined) return null;
+
     const x = Number(a);
     const y = Number(b);
     const z = Number(c);
     if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) return null;
+
     return new Vec3(x, y, z);
   }
 

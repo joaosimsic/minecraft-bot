@@ -1,5 +1,4 @@
 import mineflayer from 'mineflayer';
-import { pathfinder } from 'mineflayer-pathfinder';
 import { config } from './config';
 import { ViaProxy } from './infra/ViaProxy';
 import { Logger } from './shared/Logger';
@@ -59,7 +58,6 @@ class BotRunner {
     }
 
     const bot = this.createBot();
-    bot.loadPlugin(pathfinder);
 
     const kernel = new BotKernel(bot);
 

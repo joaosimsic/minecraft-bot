@@ -14,8 +14,11 @@ export class AutoMode implements BotMode {
   public async tick(): Promise<void> {
     await this.craft.ensureTools();
     await this.craft.craftTorches();
+
     await this.mine.descendTo(state.targetY);
+
     await this.mine.stripMineStep(state.miningDir, 16);
+
     await this.chest.depositRoutine();
   }
 }

@@ -85,10 +85,12 @@ export class ViaProxy {
           resolve(false);
         });
       });
+
       if (ok) return okVoid();
 
       await Bun.sleep(500);
     }
+
     return [
       new Error(
         `port ${bindPort} not open after ${timeoutMs}ms (last: ${lastErrMsg})`,
@@ -140,6 +142,7 @@ export class ViaProxy {
 
     const raced = await Promise.race([portReady, earlyExit]);
     const [e2] = raced;
+
     if (e2) return [e2, null];
 
     return okVoid();

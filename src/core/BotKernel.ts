@@ -10,10 +10,12 @@ import { GuidedMode } from '../modes/GuidedMode';
 import { ModeController } from './ModeController';
 import { Telemetry } from './Telemetry';
 import { config } from '../config';
+import { NavigationController } from '../navigation/NavigationController';
 
 export class BotKernel {
   public readonly bot: Bot;
   public readonly door: Door;
+  private readonly navigation: NavigationController;
   public readonly navigator: Navigator;
   public readonly mine: Mine;
   public readonly craft: Craft;
@@ -27,14 +29,16 @@ export class BotKernel {
   public constructor(bot: Bot) {
     this.bot = bot;
     this.door = new Door(bot);
-    this.navigator = new Navigator(bot, this.door);
-    this.mine = new Mine(bot);
+    this.navigation = new NavigationController(bot, 'navigation');
+    this.navigator = new Navigator(bot, this.navigation);
+    this.mine = new Mine(bot, this.navigator);
     this.craft = new Craft(bot);
     this.chest = new Chest(bot);
     this.autoMode = new AutoMode(this.mine, this.craft, this.chest);
     this.guidedMode = new GuidedMode(this.navigator, config.env.goal);
     this.controller = new ModeController();
     this.input = new InputHandler(this.bot, this.controller, this.autoMode, this.guidedMode);
+
     this.telemetry = new Telemetry(
       this.bot,
       config.env.LOG_SAMPLE_MS,

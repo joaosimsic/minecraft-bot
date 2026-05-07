@@ -7,6 +7,7 @@ export class FleetPane {
   private readonly frame: ScreenFrame;
   private readonly onFleetRowSelect: (id: string) => void;
   private readonly statusWrap: blessed.Widgets.BoxElement;
+  private readonly focusedRow: blessed.Widgets.BoxElement;
   private readonly focusedBox: blessed.Widgets.BoxElement;
   private readonly miniMapBox: blessed.Widgets.BoxElement;
   private readonly fleetTable: blessed.Widgets.ListTableElement;
@@ -19,9 +20,28 @@ export class FleetPane {
   private lastSelectedIdx = -1;
   private lastFooterText = '';
   private suppressSelectEvent = false;
+  private activeWindowBotId: string | null = null;
 
   public get lastFleetOrderSnapshot(): string[] {
     return this.lastFleetOrder;
+  }
+
+  public setActiveWindow(botId: string | null): void {
+    if (this.activeWindowBotId === botId) return;
+    this.activeWindowBotId = botId;
+
+    if (botId === null) {
+      this.statusWrap.setLabel(' status ');
+      this.focusedRow.height = '50%';
+      this.fleetTable.show();
+      this.scheduleRender();
+      return;
+    }
+
+    this.statusWrap.setLabel(` ${botId} `);
+    this.focusedRow.height = '100%';
+    this.fleetTable.hide();
+    this.scheduleRender();
   }
 
   public constructor(
@@ -34,7 +54,7 @@ export class FleetPane {
 
     this.statusWrap = blessed.box({
       parent: frame.screen,
-      top: 0,
+      top: 1,
       left: '70%',
       right: 0,
       bottom: 4,
@@ -43,7 +63,7 @@ export class FleetPane {
       tags: false,
     });
 
-    const focusedRow = blessed.box({
+    this.focusedRow = blessed.box({
       parent: this.statusWrap,
       top: 0,
       left: 0,
@@ -52,7 +72,7 @@ export class FleetPane {
     });
 
     this.focusedBox = blessed.box({
-      parent: focusedRow,
+      parent: this.focusedRow,
       top: 0,
       left: 0,
       width: '62%',
@@ -62,7 +82,7 @@ export class FleetPane {
     });
 
     this.miniMapBox = blessed.box({
-      parent: focusedRow,
+      parent: this.focusedRow,
       top: 0,
       left: '62%',
       right: 0,
@@ -208,7 +228,9 @@ export class FleetPane {
 
     setInputFocusLabel(fid);
 
-    const footerText = ` focus: ${fid} | mode: ${mode} | bots: ${online}/${total} online | log tabs · F1 · F2 · ^K · Tab · ^C `;
+    const win =
+      this.activeWindowBotId === null ? 'all' : this.activeWindowBotId;
+    const footerText = ` [${win}] focus: ${fid} | mode: ${mode} | bots: ${online}/${total} online | Alt+0–9 windows · F1 · F2 · ^K · Tab · ^C `;
     if (footerText !== this.lastFooterText) {
       this.lastFooterText = footerText;
       this.footer.setContent(footerText);

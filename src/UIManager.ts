@@ -23,7 +23,7 @@ const HELP_TEXT = [
   '  bots | help | ?',
   '  ^K — palette (fuzzy commands / @bots)',
   '',
-  'Log: click a tab above the log (all vs each bot) or use :filter',
+  'Windows: Alt+0 all bots · Alt+1–9 per-bot window (or click the bar)',
   'Keys: F1 help · F2 multi-log columns · ^K palette · ^C quit · Tab · Up/Down history',
   'CLI: --web or WEB_COMPANION=1 — browser dashboard at http://WEB_BIND:WEB_PORT',
 ].join('\n');
@@ -66,6 +66,9 @@ export class UIManager implements InputUiBridge {
     this.logPane.bindFocusInput((): void => this.inputPane.focusInput());
     this.inputPane.bindEscapeFromInput((): void =>
       this.logPane.handleEscapeFromInput(),
+    );
+    this.logPane.bindFilterChanged((botId): void =>
+      this.fleetPane.setActiveWindow(botId),
     );
 
     this.unsubLog = bus.onLog((line): void => {
@@ -201,13 +204,23 @@ export class UIManager implements InputUiBridge {
       ]);
     });
 
-    for (let n = 1; n <= 9; n += 1) {
-      const idx = n - 1;
-      this.frame.screen.key([`M-${n}`], (): void => {
-        if (this.frame.screen.focused === this.inputPane.textbox) return;
-        const id = this.fleetPane.lastFleetOrderSnapshot[idx];
-        if (id !== undefined) this.onFleetFocusCb(id);
-      });
+    const switchWindow = (windowIdx: number): void => {
+      if (windowIdx === 0) {
+        this.logPane.setLogFilter(null);
+        return;
+      }
+
+      const id = this.fleetPane.lastFleetOrderSnapshot[windowIdx - 1];
+      if (id === undefined) return;
+      this.onFleetFocusCb(id);
+      this.logPane.setLogFilter(id);
+    };
+
+    for (let n = 0; n <= 9; n += 1) {
+      const idx = n;
+      const handler = (): void => switchWindow(idx);
+      this.frame.screen.key([`M-${n}`], handler);
+      this.inputPane.textbox.key([`M-${n}`], handler);
     }
 
     this.checkMinTerminal();

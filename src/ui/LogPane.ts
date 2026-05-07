@@ -36,6 +36,7 @@ export class LogPane {
   private logFlushScheduled = false;
   private multiDirty = false;
   private logFlushSeq = 0;
+  private filterChangeCb: ((botId: string | null) => void) | null = null;
 
   public constructor(frame: ScreenFrame, onQuit: () => void) {
     this.frame = frame;
@@ -46,7 +47,7 @@ export class LogPane {
       parent: screen,
       top: 0,
       left: 0,
-      width: '70%',
+      width: '100%',
       height: 1,
       mouse: true,
       keys: true,
@@ -116,6 +117,10 @@ export class LogPane {
     this.focusInput = fn;
   }
 
+  public bindFilterChanged(fn: (botId: string | null) => void): void {
+    this.filterChangeCb = fn;
+  }
+
   public setLogFilter(botId: string | null): void {
     if (this.logFilterBotId === botId) {
       this.syncLogTabSelection();
@@ -124,6 +129,7 @@ export class LogPane {
     this.logFilterBotId = botId;
     this.refillLogFromStore();
     this.syncLogTabSelection();
+    if (this.filterChangeCb !== null) this.filterChangeCb(botId);
   }
 
   public setLogLevelMin(level: LogLevel | null): void {

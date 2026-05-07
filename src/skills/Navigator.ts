@@ -11,7 +11,9 @@ import { metrics } from '../shared/Metrics';
 type PathfinderBot = Bot & { pathfinder: Pathfinder };
 type StepResult = 'reached' | 'timeout' | 'nopath';
 
-const MAX_ATTEMPTS = 1;
+const MAX_ATTEMPTS = 3;
+const PATH_TIMEOUT_MS = 12000;
+const MANUAL_STALL_BAIL = 12;
 
 export class Navigator {
   private readonly log = new Logger('Navigator');
@@ -65,7 +67,7 @@ export class Navigator {
 
     metrics.inc('walk.pathfind.fail');
     this.log.decision('walk_fallback', 'pathfind_failed_try_manual');
-    const manual = await this.manualWalkTo(target);
+    const manual = await this.manualWalkTo(target, range);
     metrics.inc(manual ? 'walk.manual.success' : 'walk.manual.fail');
     this.log.event('walk_end', { ok: manual, mode: 'manual' });
     return manual;
@@ -124,6 +126,7 @@ export class Navigator {
 
       metrics.inc('path.attempt');
       this.log.event('pathfind_attempt', { attempt: attempts + 1, target });
+      await this.door.openDoorsTowardTarget(target);
       const step = await this.stepToward(target, range);
       metrics.inc(`path.result.${step}`);
       this.log.event('pathfind_result', { attempt: attempts + 1, result: step });
@@ -138,10 +141,20 @@ export class Navigator {
       const yaw = this.pbot.entity.yaw;
       const frontX = stuckPos.x + Math.round(-Math.sin(yaw));
       const frontZ = stuckPos.z + Math.round(-Math.cos(yaw));
-      this.badNodes.add(`${frontX},${stuckPos.y},${frontZ}`);
-      metrics.inc('bad_node');
-      this.log.decision('mark_bad_node', 'pathfind_timeout', { x: frontX, y: stuckPos.y, z: frontZ });
-      this.log.event('mark_bad_node', { x: frontX, y: stuckPos.y, z: frontZ });
+      const frontBlock = this.pbot.blockAt(new Vec3(frontX, stuckPos.y, frontZ));
+      const frontIsDoor = frontBlock !== null && this.door.isDoor(frontBlock.name);
+
+      if (frontIsDoor) {
+        metrics.inc('bad_node.skip.door');
+        this.log.decision('skip_bad_node', 'front_is_door', { x: frontX, y: stuckPos.y, z: frontZ });
+      }
+
+      if (!frontIsDoor) {
+        this.badNodes.add(`${frontX},${stuckPos.y},${frontZ}`);
+        metrics.inc('bad_node');
+        this.log.decision('mark_bad_node', 'pathfind_timeout', { x: frontX, y: stuckPos.y, z: frontZ });
+        this.log.event('mark_bad_node', { x: frontX, y: stuckPos.y, z: frontZ });
+      }
 
       attempts++;
 
@@ -213,11 +226,29 @@ export class Navigator {
   }
 
   private async stepToward(target: Vec3, range: number): Promise<StepResult> {
-    const [err] = await wrap(
+    let timer: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<'TIMEOUT'>((resolve): void => {
+      timer = setTimeout((): void => resolve('TIMEOUT'), PATH_TIMEOUT_MS);
+    });
+
+    const gotoPromise = wrap(
       this.pbot.pathfinder.goto(
         new goals.GoalNear(target.x, target.y, target.z, range),
       ),
     );
+
+    const result = await Promise.race([gotoPromise, timeoutPromise]);
+    if (timer) clearTimeout(timer);
+
+    if (result === 'TIMEOUT') {
+      this.pbot.pathfinder.stop();
+      metrics.inc('path.result.hard_timeout');
+      this.log.warn(`pathfinder.goto hard timeout after ${PATH_TIMEOUT_MS}ms`);
+      this.log.event('pathfind_hard_timeout', { ms: PATH_TIMEOUT_MS, target });
+      return 'timeout';
+    }
+
+    const [err] = result;
 
     if (!err) {
       const dist = this.pbot.entity.position.distanceTo(target);
@@ -240,10 +271,11 @@ export class Navigator {
     return 'timeout';
   }
 
-  private async manualWalkTo(target: Vec3): Promise<boolean> {
+  private async manualWalkTo(target: Vec3, range = 1): Promise<boolean> {
     this.log.info('manual walk to', `(${target.x}, ${target.y}, ${target.z})`);
-    this.log.event('manual_walk_start', { target });
+    this.log.event('manual_walk_start', { target, range });
     const start = Date.now();
+    const reachSq = range * range;
 
     let lastPos = this.pbot.entity.position.clone();
     let stalledTicks = 0;
@@ -256,7 +288,7 @@ export class Navigator {
       const dz = target.z - pos.z;
       const dy = target.y - pos.y;
 
-      if (dx * dx + dz * dz < 0.25 && Math.abs(dy) < 1) {
+      if (dx * dx + dz * dz < reachSq && Math.abs(dy) < 1) {
         this.pbot.setControlState('forward', false);
         this.pbot.setControlState('jump', false);
         this.log.event('manual_walk_end', { ok: true, iter, reason: 'reached' });
@@ -339,6 +371,17 @@ export class Navigator {
           pos: { x: +pos.x.toFixed(2), y: +pos.y.toFixed(2), z: +pos.z.toFixed(2) },
           front: { name: frontBlock?.name ?? null, isDoor: frontIsDoor },
         });
+      }
+
+      if (stalledTicks >= MANUAL_STALL_BAIL) {
+        this.pbot.setControlState('forward', false);
+        this.pbot.setControlState('jump', false);
+        metrics.inc('manual_walk.bail.stalled');
+        this.log.warn(`manual walk bail after ${stalledTicks} stalled ticks`);
+        this.log.event('manual_walk_end', {
+          ok: false, iter, reason: 'stalled_bail', stalledTicks,
+        });
+        return false;
       }
 
       await Utils.sleep(250);

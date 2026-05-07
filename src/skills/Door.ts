@@ -21,6 +21,9 @@ type SkipReason =
 export class Door {
   private readonly log = new Logger('Door');
   private readonly recentlyToggled = new Set<string>();
+  private lastScanBucket: string | null = null;
+  private lastScanHadDoor: boolean = false;
+  private lastScanTs: number = 0;
 
   public constructor(private readonly bot: Bot) {}
 
@@ -63,6 +66,12 @@ export class Door {
       return false;
     }
 
+    const below = this.bot.blockAt(pos.offset(0, -1, 0));
+    if (below !== null && this.isDoor(below.name)) {
+      this.logSkip('upper_half', pos, blockName, props, inFront);
+      return false;
+    }
+
     if (props.open === 'true' || props.open === true) {
       this.logSkip('already_open', pos, blockName, props, inFront);
       return true;
@@ -100,6 +109,19 @@ export class Door {
     const pos = this.bot.entity.position.floored();
     const yaw = this.bot.entity.yaw;
 
+    const yawBucket = Math.round(yaw * 4);
+    const bucket = `${pos.x},${pos.y},${pos.z},${yawBucket}`;
+    const now = Date.now();
+
+    if (
+      this.lastScanBucket === bucket &&
+      !this.lastScanHadDoor &&
+      now - this.lastScanTs < 1000
+    ) {
+      metrics.inc('door.scan.cache_hit');
+      return;
+    }
+
     const dx = Math.round(-Math.sin(yaw));
     const dz = Math.round(-Math.cos(yaw));
 
@@ -131,6 +153,11 @@ export class Door {
       };
     });
 
+    const hadDoor = scan.some((s): boolean => s.isDoor === true);
+    this.lastScanBucket = bucket;
+    this.lastScanHadDoor = hadDoor;
+    this.lastScanTs = now;
+
     this.log.event('door_scan', {
       botPos: { x: +this.bot.entity.position.x.toFixed(2), y: +this.bot.entity.position.y.toFixed(2), z: +this.bot.entity.position.z.toFixed(2) },
       yaw: +yaw.toFixed(3), dx, dz,
@@ -138,6 +165,73 @@ export class Door {
     });
 
     await Promise.all(targets.map((t): Promise<boolean> => this.openDoorAt(t)));
+  }
+
+  public async openDoorsTowardTarget(target: Vec3, maxBlocks = 8): Promise<number> {
+    const start = this.bot.entity.position;
+    const dx = target.x - start.x;
+    const dz = target.z - start.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    if (dist < 0.5) return 0;
+
+    const stepX = dx / dist;
+    const stepZ = dz / dist;
+    const steps = Math.min(maxBlocks, Math.ceil(dist));
+
+    const seen = new Set<string>();
+    const candidates: Vec3[] = [];
+
+    let i = 1;
+    while (i <= steps) {
+      const px = Math.floor(start.x + stepX * i);
+      const pz = Math.floor(start.z + stepZ * i);
+      const py = Math.floor(start.y);
+
+      const checks = [
+        new Vec3(px, py, pz),
+        new Vec3(px, py + 1, pz),
+      ];
+
+      const j = checks.length;
+      let k = 0;
+      while (k < j) {
+        const c = checks[k]!;
+        const key = `${c.x},${c.y},${c.z}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          const b = this.bot.blockAt(c);
+          if (b !== null && this.isDoor(b.name)) candidates.push(c);
+        }
+        k++;
+      }
+      i++;
+    }
+
+    if (candidates.length === 0) return 0;
+
+    metrics.inc('door.preopen.scan');
+    this.log.event('door_preopen', { target: { x: target.x, y: target.y, z: target.z }, count: candidates.length });
+
+    return this.lookThenOpen(candidates);
+  }
+
+  private async lookThenOpen(candidates: Vec3[]): Promise<number> {
+    let opened = 0;
+    const n = candidates.length;
+    let i = 0;
+    while (i < n) {
+      const c = candidates[i]!;
+      const [lookErr] = await wrap(
+        this.bot.lookAt(new Vec3(c.x + 0.5, this.bot.entity.position.y + 1.6, c.z + 0.5)),
+      );
+      if (lookErr) this.log.warn('preopen lookAt failed', lookErr.message);
+
+      const ok = await this.openDoorAt(c);
+      if (ok) opened++;
+      i++;
+    }
+    return opened;
   }
 
   private logSkip(
@@ -196,6 +290,9 @@ export class Door {
           metrics.inc('door.close');
           this.log.info('closed at', `(${pos.x}, ${pos.y}, ${pos.z})`);
           this.log.event('door_close', { x: pos.x, y: pos.y, z: pos.z });
+          const closeKey = `${pos.x},${pos.y},${pos.z}`;
+          this.recentlyToggled.add(closeKey);
+          setTimeout(() => this.recentlyToggled.delete(closeKey), 3000);
         }
 
         return;

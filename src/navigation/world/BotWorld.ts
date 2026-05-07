@@ -59,14 +59,20 @@ export class BotWorld implements World {
     return 'ground';
   }
 
-  public hostileOccupiesFootCell(ix: number, iy: number, iz: number): boolean {
+  public hostileOccupiesCell(ix: number, iy: number, iz: number): boolean {
     for (const entity of Object.values(this.bot.entities) as Entity[]) {
       if (entity === undefined) continue;
       if (entity.id === this.bot.entity.id) continue;
       if (!BotWorld.isHostileEntity(entity)) continue;
-      if (!BotWorld.entityBlocksFootCell(entity, ix, iy, iz)) continue;
+      if (!BotWorld.entityBlocksCell(entity, ix, iy, iz)) continue;
       return true;
     }
+    return false;
+  }
+
+  public hostileOccupiesFootCell(ix: number, iy: number, iz: number): boolean {
+    if (this.hostileOccupiesCell(ix, iy, iz)) return true;
+    if (this.hostileOccupiesCell(ix, iy + 1, iz)) return true;
     return false;
   }
 
@@ -125,7 +131,7 @@ export class BotWorld implements World {
     return false;
   }
 
-  private static entityBlocksFootCell(
+  private static entityBlocksCell(
     entity: Entity,
     ix: number,
     iy: number,
@@ -143,8 +149,7 @@ export class BotWorld implements World {
     if (iz < minZ) return false;
     if (iz > maxZ) return false;
     const by = Math.floor(entity.position.y);
-    if (by < iy - 1) return false;
-    if (by > iy + 1) return false;
+    if (by !== iy) return false;
     return true;
   }
 }

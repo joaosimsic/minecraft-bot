@@ -8,25 +8,28 @@ import { NAV_EVENT, type MovementPhase } from '../telemetry/Events';
 import { NavigationRecorder } from '../telemetry/Recorder';
 import { SearchEdge } from '../planner/Edge';
 
-export type RecoveryState = 'EXECUTING' | 'VALIDATE_FAIL' | 'REPLAN';
-
 export class Recovery {
-  private state: RecoveryState = 'EXECUTING';
   private replansUsed = 0;
+  private transientReplansUsed = 0;
 
   public constructor(
     private readonly replanBudget: number,
+    private readonly transientReplanBudget: number,
     private readonly memory: EdgeMemory,
     private readonly recorder: NavigationRecorder,
   ) {}
 
   public resetForNewGoal(): void {
     this.replansUsed = 0;
-    this.state = 'EXECUTING';
+    this.transientReplansUsed = 0;
   }
 
   public canReplan(): boolean {
     return this.replansUsed < this.replanBudget;
+  }
+
+  public canTransientReplan(): boolean {
+    return this.transientReplansUsed < this.transientReplanBudget;
   }
 
   public consumeReplan(
@@ -37,7 +40,18 @@ export class Recovery {
 
     this.replansUsed += 1;
     this.recorder.emit(NAV_EVENT.REPLAN, { reason, fromPos });
-    this.state = 'EXECUTING';
+    return okVoid();
+  }
+
+  public consumeTransientReplan(
+    reason: string,
+    fromPos: Record<string, number>,
+  ): Result<null> {
+    if (!this.canTransientReplan())
+      return fail(new Error('transient_replan_budget'));
+
+    this.transientReplansUsed += 1;
+    this.recorder.emit(NAV_EVENT.REPLAN, { reason, fromPos });
     return okVoid();
   }
 
@@ -49,9 +63,8 @@ export class Recovery {
     reason: string,
     phase: MovementPhase,
     action: NavigationAction,
+    observed?: Record<string, unknown>,
   ): Result<null> {
-    this.state = 'VALIDATE_FAIL';
-
     const row = this.memory.recordFailure(fromKey, toKey, kind, tick);
 
     this.recorder.emit(NAV_EVENT.EDGE_PENALIZED, {
@@ -65,9 +78,9 @@ export class Recovery {
       reason,
       tick,
       phase,
+      observed,
     });
 
-    this.state = 'REPLAN';
     return okVoid();
   }
 
@@ -93,13 +106,5 @@ export class Recovery {
       windowTicks,
       lastProgressPos,
     });
-  }
-
-  public markExecuting(): void {
-    this.state = 'EXECUTING';
-  }
-
-  public getState(): RecoveryState {
-    return this.state;
   }
 }

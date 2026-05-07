@@ -21,8 +21,14 @@ export class FixtureWorld implements World {
     return 'ground';
   }
 
-  public hostileOccupiesFootCell(x: number, y: number, z: number): boolean {
+  public hostileOccupiesCell(x: number, y: number, z: number): boolean {
     return this.hostileFeet.has(FixtureWorld.k(x, y, z));
+  }
+
+  public hostileOccupiesFootCell(x: number, y: number, z: number): boolean {
+    if (this.hostileOccupiesCell(x, y, z)) return true;
+    if (this.hostileOccupiesCell(x, y + 1, z)) return true;
+    return false;
   }
 
   public static k(x: number, y: number, z: number): string {
@@ -71,5 +77,9 @@ export class FixtureWorld implements World {
 
   public closedDoorAt(x: number, y: number, z: number): boolean {
     return this.closedDoors.has(FixtureWorld.k(x, y, z));
+  }
+
+  public bumpSnapshot(): void {
+    this.snapshotGeneration += 1;
   }
 }

@@ -11,6 +11,7 @@ export interface World {
   cell(x: number, y: number, z: number): WorldCell;
   closedDoorAt(x: number, y: number, z: number): boolean;
   footMovementClass(x: number, y: number, z: number): MovementClass;
+  hostileOccupiesCell(ix: number, iy: number, iz: number): boolean;
   hostileOccupiesFootCell(x: number, y: number, z: number): boolean;
   readonly snapshotGeneration?: number;
 }

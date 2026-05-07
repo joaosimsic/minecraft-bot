@@ -13,6 +13,7 @@ import type { Vec3 } from 'vec3';
 import { config } from '../config';
 
 const REPLAN_BUDGET = 14;
+const TRANSIENT_REPLAN_BUDGET = 6;
 const STUCK_TICKS = 36;
 
 export class NavigationController {
@@ -52,7 +53,12 @@ export class NavigationController {
     });
     this.world = new BotWorld(bot);
     this.recorder = new NavigationRecorder(scope);
-    this.recovery = new Recovery(REPLAN_BUDGET, this.edgeMemory, this.recorder);
+    this.recovery = new Recovery(
+      REPLAN_BUDGET,
+      TRANSIENT_REPLAN_BUDGET,
+      this.edgeMemory,
+      this.recorder,
+    );
     this.executor = new NavigationExecutor(
       bot,
       this.world,
@@ -60,10 +66,9 @@ export class NavigationController {
       this.recorder,
     );
     this.executor.setTickSource((): number => this.bot.time.age);
-    bot.on('physicsTick', (): void => {
-      this.probeStuck();
-    });
   }
+
+  private readonly onPhysicsProbe = (): void => this.probeStuck();
 
   public async walkTo(goal: Vec3, range: number): AsyncResult<boolean> {
     if (this.bot.entity.position.distanceTo(goal) <= range) return ok(true);
@@ -118,7 +123,9 @@ export class NavigationController {
       this.draining = true;
       this.lastProgressKey = '';
       this.stuckTicks = 0;
+      this.bot.on('physicsTick', this.onPhysicsProbe);
       const drainResult = await this.executor.drainQueue(plan.path);
+      this.bot.removeListener('physicsTick', this.onPhysicsProbe);
 
       const dErr = drainResult[0];
       const drain = drainResult[1];
@@ -135,7 +142,7 @@ export class NavigationController {
           y: Math.floor(pos.y),
           z: Math.floor(pos.z),
         });
-        if (rErr) return ok(false);
+        if (rErr) return [rErr, null];
         continue;
       }
 
@@ -151,10 +158,13 @@ export class NavigationController {
           drain.action,
           this.bot.time.age,
           drain.reason,
-          { fromPos },
+          drain.observed,
         );
-        const [rErr] = this.recovery.consumeReplan(drain.reason, fromPos);
-        if (rErr) return ok(false);
+        const [rErr] = this.recovery.consumeTransientReplan(
+          drain.reason,
+          fromPos,
+        );
+        if (rErr) return [rErr, null];
         continue;
       }
 
@@ -166,11 +176,12 @@ export class NavigationController {
         drain.reason,
         drain.phase,
         drain.action,
+        drain.observed,
       );
 
       if (feErr) return [feErr, null];
       const [rErr2] = this.recovery.consumeReplan(drain.reason, fromPos);
-      if (rErr2) return ok(false);
+      if (rErr2) return [rErr2, null];
     }
 
     return ok(false);

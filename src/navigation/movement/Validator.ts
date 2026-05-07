@@ -11,6 +11,16 @@ import {
 import { Collision } from '../world/Collision';
 import { BETA_173 } from '../world/Beta173';
 
+export class ValidationError extends Error {
+  public readonly observed: Record<string, unknown>;
+
+  public constructor(code: string, observed: Record<string, unknown>) {
+    super(code);
+    this.name = 'ValidationError';
+    this.observed = observed;
+  }
+}
+
 export type PreValidation = { ok: true };
 
 export type PostValidation = { ok: true };
@@ -18,33 +28,16 @@ export type PostValidation = { ok: true };
 export class NavigationValidator {
   public constructor(private readonly neighborExpandOpts?: ExpandOpts) {}
 
-  private static velocityComponents(
-    bot: Bot,
-  ): { readonly x: unknown; readonly y: unknown; readonly z: unknown } | null {
-    const raw = bot.entity.velocity;
-    return raw ?? null;
-  }
-
   private static velocityBounded(bot: Bot): Result<null> {
-    const vRaw = NavigationValidator.velocityComponents(bot);
-    if (vRaw === null) return ok(null);
+    const v = bot.entity.velocity;
+    if (v === null || v === undefined) return ok(null);
 
-    if (
-      typeof vRaw.x !== 'number' ||
-      typeof vRaw.y !== 'number' ||
-      typeof vRaw.z !== 'number'
-    ) {
-      return ok(null);
-    }
-
-    const h = Math.hypot(vRaw.x, vRaw.z);
+    const h = Math.hypot(v.x, v.z);
     if (h > BETA_173.POST_ACTION_MAX_HORIZONTAL_SPEED_BLOCKS_PER_TICK) {
       return fail(new Error('post_velocity_horizontal'));
     }
 
-    if (
-      Math.abs(vRaw.y) > BETA_173.POST_ACTION_MAX_VERTICAL_ABS_BLOCKS_PER_TICK
-    ) {
+    if (Math.abs(v.y) > BETA_173.POST_ACTION_MAX_VERTICAL_ABS_BLOCKS_PER_TICK) {
       return fail(new Error('post_velocity_vertical'));
     }
 
@@ -69,16 +62,28 @@ export class NavigationValidator {
     const fromOp = Node.fromKey(next.from);
     if (fromOp[0] !== null) return [fromOp[0], null];
     const fromNode = fromOp[1];
-    if (fromNode === null) return fail(new Error('pre_from'));
+    if (fromNode === null) return fail(new ValidationError('pre_from', {}));
 
     const fb = NavigationValidator.footBlock(bot);
     if (fb.x !== fromNode.x || fb.y !== fromNode.y || fb.z !== fromNode.z) {
-      return fail(new Error('pre_foot_mismatch'));
+      return fail(
+        new ValidationError('pre_foot_mismatch', {
+          expected: { x: fromNode.x, y: fromNode.y, z: fromNode.z },
+          got: fb,
+        }),
+      );
     }
 
     const wm = world.footMovementClass(fb.x, fb.y, fb.z);
-    if (fromNode.movementClass !== wm)
-      return fail(new Error('pre_movement_class'));
+    if (fromNode.movementClass !== wm) {
+      return fail(
+        new ValidationError('pre_movement_class', {
+          expected: fromNode.movementClass,
+          got: wm,
+          at: fb,
+        }),
+      );
+    }
 
     const edgeOp = NeighborGenerator.queuedEdgeLegal(
       world,
@@ -100,16 +105,29 @@ export class NavigationValidator {
       const fromOp = Node.fromKey(completed.from);
       if (fromOp[0] !== null) return [fromOp[0], null];
       const fromNode = fromOp[1];
-      if (fromNode === null) return fail(new Error('post_interact_from'));
+      if (fromNode === null)
+        return fail(new ValidationError('post_interact_from', {}));
 
       const fb = NavigationValidator.footBlock(bot);
       if (fb.x !== fromNode.x || fb.y !== fromNode.y || fb.z !== fromNode.z) {
-        return fail(new Error('post_foot_mismatch'));
+        return fail(
+          new ValidationError('post_foot_mismatch', {
+            expected: { x: fromNode.x, y: fromNode.y, z: fromNode.z },
+            got: fb,
+          }),
+        );
       }
 
       const wm = world.footMovementClass(fb.x, fb.y, fb.z);
-      if (fromNode.movementClass !== wm)
-        return fail(new Error('post_movement_class'));
+      if (fromNode.movementClass !== wm) {
+        return fail(
+          new ValidationError('post_movement_class', {
+            expected: fromNode.movementClass,
+            got: wm,
+            at: fb,
+          }),
+        );
+      }
 
       if (
         world.closedDoorAt(
@@ -118,7 +136,15 @@ export class NavigationValidator {
           completed.targetZ,
         )
       ) {
-        return fail(new Error('post_door_still_closed'));
+        return fail(
+          new ValidationError('post_door_still_closed', {
+            target: {
+              x: completed.targetX,
+              y: completed.targetY,
+              z: completed.targetZ,
+            },
+          }),
+        );
       }
 
       const vOp = NavigationValidator.velocityBounded(bot);
@@ -130,19 +156,36 @@ export class NavigationValidator {
     const toOp = Node.fromKey(completed.to);
     if (toOp[0] !== null) return [toOp[0], null];
     const toNode = toOp[1];
-    if (toNode === null) return fail(new Error('post_to'));
+    if (toNode === null) return fail(new ValidationError('post_to', {}));
 
     const fb = NavigationValidator.footBlock(bot);
     if (fb.x !== toNode.x || fb.y !== toNode.y || fb.z !== toNode.z) {
-      return fail(new Error('post_foot_mismatch'));
+      return fail(
+        new ValidationError('post_foot_mismatch', {
+          expected: { x: toNode.x, y: toNode.y, z: toNode.z },
+          got: fb,
+        }),
+      );
     }
 
     const wm = world.footMovementClass(fb.x, fb.y, fb.z);
-    if (toNode.movementClass !== wm)
-      return fail(new Error('post_movement_class'));
+    if (toNode.movementClass !== wm) {
+      return fail(
+        new ValidationError('post_movement_class', {
+          expected: toNode.movementClass,
+          got: wm,
+          at: fb,
+        }),
+      );
+    }
 
     if (!Collision.canStandAt(world, toNode)) {
-      return fail(new Error('post_not_standable'));
+      return fail(
+        new ValidationError('post_not_standable', {
+          node: { x: toNode.x, y: toNode.y, z: toNode.z },
+          gotFoot: fb,
+        }),
+      );
     }
 
     const vOp2 = NavigationValidator.velocityBounded(bot);

@@ -4,11 +4,11 @@ import type { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
 import type { NavigationAction } from './Actions';
 import type { World } from '../world/World';
-import { NavigationValidator } from './Validator';
+import { NavigationValidator, ValidationError } from './Validator';
 import { NavigationRecorder } from '../telemetry/Recorder';
 import { NAV_EVENT } from '../telemetry/Events';
 import type { MovementPhase } from '../telemetry/Events';
-import { Node, parseNodeKey } from '../planner/Node';
+import { parseNodeKey } from '../planner/Node';
 
 export type DrainOutcome =
   | { done: true }
@@ -17,12 +17,19 @@ export type DrainOutcome =
       action: NavigationAction;
       reason: string;
       phase: MovementPhase;
+      observed?: Record<string, unknown>;
     };
 
 const MAX_WALK_TICKS = 56;
+const WALK_MIDCHECK_EVERY_TICKS = 8;
 const MAX_JUMP_TICKS = 45;
 const MAX_DROP_TICKS = 55;
 const MAX_INTERACT_TICKS = 48;
+
+function outcomeObserved(err: Error): Record<string, unknown> | undefined {
+  if (err instanceof ValidationError) return err.observed;
+  return undefined;
+}
 
 export class NavigationExecutor {
   private queue: NavigationAction[] = [];
@@ -132,12 +139,14 @@ export class NavigationExecutor {
       const tick = this.gameTick();
       const pre = this.validator.preAction(this.world, this.bot, next, tick);
       if (pre[0] !== null) {
+        const pe = pre[0];
         this.finish(
           ok({
             done: false,
             action: next,
-            reason: pre[0].message,
+            reason: pe.message,
             phase: 'pre_action',
+            observed: outcomeObserved(pe),
           }),
         );
         return;
@@ -169,10 +178,26 @@ export class NavigationExecutor {
       tick,
     });
 
-    if (cur.kind === 'walk') await this.stepWalk(cur);
-    if (cur.kind === 'jump_up') await this.stepJump(cur);
-    if (cur.kind === 'drop_down') await this.stepDrop(cur);
-    if (cur.kind === 'interact') await this.stepInteract(cur);
+    const k = cur.kind;
+    switch (k) {
+      case 'walk':
+        await this.stepWalk(cur);
+        return;
+      case 'jump_up':
+        await this.stepJump(cur);
+        return;
+      case 'drop_down':
+        await this.stepDrop(cur);
+        return;
+      case 'interact':
+        await this.stepInteract(cur);
+        return;
+      default: {
+        const _exhaustive: never = k;
+        void _exhaustive;
+        return;
+      }
+    }
   }
 
   private async stepWalk(
@@ -205,6 +230,29 @@ export class NavigationExecutor {
       return;
     }
 
+    if (this.actionTicks % WALK_MIDCHECK_EVERY_TICKS === 0) {
+      const pre = this.validator.preAction(
+        this.world,
+        this.bot,
+        cur,
+        this.gameTick(),
+      );
+      if (pre[0] !== null) {
+        const pe = pre[0];
+        this.bot.setControlState('forward', false);
+        this.finish(
+          ok({
+            done: false,
+            action: cur,
+            reason: pe.message,
+            phase: 'pre_action',
+            observed: outcomeObserved(pe),
+          }),
+        );
+        return;
+      }
+    }
+
     const post = this.validator.postAction(
       this.world,
       this.bot,
@@ -226,13 +274,15 @@ export class NavigationExecutor {
       return;
     }
 
+    const perr = post[0];
     if (this.actionTicks >= MAX_WALK_TICKS) {
       this.finish(
         ok({
           done: false,
           action: cur,
-          reason: post[0].message,
+          reason: perr.message,
           phase: 'post_action',
+          observed: outcomeObserved(perr),
         }),
       );
     }
@@ -289,13 +339,15 @@ export class NavigationExecutor {
       return;
     }
 
+    const perr = post[0];
     if (this.actionTicks >= MAX_JUMP_TICKS) {
       this.finish(
         ok({
           done: false,
           action: cur,
-          reason: post[0].message,
+          reason: perr.message,
           phase: 'post_action',
+          observed: outcomeObserved(perr),
         }),
       );
     }
@@ -350,13 +402,15 @@ export class NavigationExecutor {
       return;
     }
 
+    const perr = post[0];
     if (this.actionTicks >= MAX_DROP_TICKS) {
       this.finish(
         ok({
           done: false,
           action: cur,
-          reason: post[0].message,
+          reason: perr.message,
           phase: 'post_action',
+          observed: outcomeObserved(perr),
         }),
       );
     }
@@ -366,6 +420,18 @@ export class NavigationExecutor {
     cur: NavigationAction & { kind: 'interact' },
   ): Promise<void> {
     const tick = this.gameTick();
+
+    if (this.actionTicks >= MAX_INTERACT_TICKS) {
+      this.finish(
+        ok({
+          done: false,
+          action: cur,
+          reason: `interact_timeout_${this.interactPhase}`,
+          phase: 'macro',
+        }),
+      );
+      return;
+    }
 
     if (this.interactPhase === 'align') {
       const [e] = await wrap(
@@ -426,17 +492,6 @@ export class NavigationExecutor {
       this.working = null;
       if (this.queue.length === 0) this.finish(ok({ done: true }));
       return;
-    }
-
-    if (this.actionTicks >= MAX_INTERACT_TICKS) {
-      this.finish(
-        ok({
-          done: false,
-          action: cur,
-          reason: post[0].message,
-          phase: 'post_action',
-        }),
-      );
     }
   }
 }

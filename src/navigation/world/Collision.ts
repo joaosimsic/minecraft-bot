@@ -16,8 +16,8 @@ export class Collision {
   }
 
   public static canStandAt(world: World, node: Node): boolean {
-    if (world.hostileOccupiesFootCell(node.x, node.y, node.z)) return false;
-    if (world.hostileOccupiesFootCell(node.x, node.y + 1, node.z)) return false;
+    if (world.hostileOccupiesCell(node.x, node.y, node.z)) return false;
+    if (world.hostileOccupiesCell(node.x, node.y + 1, node.z)) return false;
 
     const [below] = worldSupportAndBody(world, node);
     if (!below.topSupportStand) return false;

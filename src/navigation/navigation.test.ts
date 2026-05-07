@@ -10,7 +10,17 @@ import { NeighborGenerator } from './planner/NeighborGenerator';
 import { EdgeMemory } from './recovery/EdgeMemory';
 import { FixtureWorld } from './test/FixtureWorld';
 import { NavigationValidator } from './movement/Validator';
-import { emptyAirCell } from './world/Collision';
+import { emptyAirCell, solidGroundCell } from './world/Collision';
+import type { WorldCell } from './world/World';
+import { EventEmitter } from 'node:events';
+import { readFileSync, writeFileSync } from 'fs';
+import { NAV_EVENT } from './telemetry/Events';
+import { Recovery } from './recovery/Recovery';
+import { NavigationRecorder } from './telemetry/Recorder';
+import { NavigationController } from './NavigationController';
+import { Collision } from './world/Collision';
+import { ValidationError } from './movement/Validator';
+import { WalkAction, type NavigationAction } from './movement/Actions';
 
 describe('Heuristic', () => {
   test('manhattan with vertical weight', () => {
@@ -293,5 +303,328 @@ describe('Post velocity', () => {
 
     const good = v.postAction(w, chill, step, 0);
     expect(good[0]).toBeNull();
+  });
+});
+
+const THIN_FLOOR: WorldCell = { blocksBody: false, topSupportStand: true };
+
+class CaptureRecorder extends NavigationRecorder {
+  public readonly frames: Array<{
+    type: string;
+    data?: Record<string, unknown>;
+  }> = [];
+
+  public override emit(type: string, data?: Record<string, unknown>): void {
+    this.frames.push({ type, data });
+    super.emit(type, data);
+  }
+}
+
+describe('EdgeMemory limits', () => {
+  test('clamps learned add after many failures on same edge', () => {
+    const m = new EdgeMemory();
+    let i = 0;
+    while (i < 50) {
+      void m.recordFailure('0,0,0', '1,0,0', 'walk', 0);
+      i += 1;
+    }
+    const c = m.costWithMemory('0,0,0', '1,0,0', 'walk', 1, 0);
+    expect(c).toBe(41);
+  });
+
+  test('corrupt persist file yields empty memory', () => {
+    const fp = join(
+      tmpdir(),
+      `nav-bad-${Math.random().toString(36).slice(2)}.json`,
+    );
+    writeFileSync(fp, '{broken', 'utf8');
+    const m = new EdgeMemory({ persistPath: fp });
+    expect(m.costWithMemory('0,0,0', '1,0,0', 'walk', 1, 10)).toBe(1);
+    unlinkSync(fp);
+  });
+
+  test('persist trim keeps newest rows by lastFailureTick', () => {
+    const fp = join(
+      tmpdir(),
+      `nav-trim-${Math.random().toString(36).slice(2)}.json`,
+    );
+    const m1 = new EdgeMemory({
+      persistPath: fp,
+      maxEntries: 5,
+      saveEveryFailures: 1,
+    });
+    let j = 0;
+    while (j < 12) {
+      void m1.recordFailure(`${j},0,0`, `${j},1,0`, 'walk', 100 + j);
+      j += 1;
+    }
+    const raw = readFileSync(fp, 'utf8');
+    const parsed = JSON.parse(raw) as { rows: { id: string }[] };
+    expect(parsed.rows.length).toBe(5);
+    unlinkSync(fp);
+  });
+});
+
+describe('Recovery budgets', () => {
+  test('transient replan exhausts separately from verified failures', () => {
+    const rec = new CaptureRecorder('t_recovery');
+    const r = new Recovery(14, 6, new EdgeMemory(), rec);
+    let n = 0;
+    while (n < 6) {
+      const [e] = r.consumeTransientReplan('pre', { x: 0, y: 0, z: 0 });
+      expect(e).toBeNull();
+      n += 1;
+    }
+    const [fail] = r.consumeTransientReplan('pre', { x: 0, y: 0, z: 0 });
+    expect(fail?.message).toBe('transient_replan_budget');
+    expect(r.canReplan()).toBe(true);
+  });
+
+  test('replen budget rejects after exhaustion', () => {
+    const rec = new CaptureRecorder('t_recovery2');
+    const r = new Recovery(1, 6, new EdgeMemory(), rec);
+    expect(r.consumeReplan('a', { x: 0, y: 0, z: 0 })[0]).toBeNull();
+    expect(r.consumeReplan('b', { x: 0, y: 0, z: 0 })[0]?.message).toBe(
+      'replan_budget',
+    );
+  });
+});
+
+describe('AStar staleness', () => {
+  test('abort when snapshot bumps mid-search', () => {
+    const w = new FixtureWorld();
+    w.platformXZ(64, 0, 0, 8, 0);
+    const mem = new EdgeMemory();
+    const ends: Record<string, unknown>[] = [];
+    let armed = false;
+    const telemetry = {
+      searchStart(): void {},
+      searchEnd(ev: Record<string, unknown>): void {
+        ends.push(ev);
+      },
+      nodeExpand(_ev: Record<string, unknown>): void {
+        if (armed) return;
+        armed = true;
+        w.bumpSnapshot();
+      },
+      pathSelected(_ev: Record<string, unknown>): void {},
+      candidateGenerated(_ev: Record<string, unknown>): void {},
+      candidateRejected(_ev: Record<string, unknown>): void {},
+    };
+
+    const r = AStar.search(
+      w,
+      new Node(0, 65, 0),
+      new Node(8, 65, 0),
+      mem,
+      0,
+      'snap',
+      telemetry,
+    );
+
+    expect(r[0]?.message).toBe('world_snapshot_stale');
+    expect(ends[0]?.status).toBe('aborted');
+    expect(ends[0]?.reason).toBe('snapshot_stale');
+  });
+
+  test('tie-break produces identical paths on repeated search', () => {
+    const w = new FixtureWorld();
+    w.platformXZ(64, 0, 0, 4, 0);
+    w.platformXZ(64, 0, 1, 4, 1);
+    const mem = new EdgeMemory();
+    const ra = AStar.search(
+      w,
+      new Node(0, 65, 0),
+      new Node(4, 65, 1),
+      mem,
+      0,
+      'tie_a',
+    );
+    const rb = AStar.search(
+      w,
+      new Node(0, 65, 0),
+      new Node(4, 65, 1),
+      mem,
+      0,
+      'tie_b',
+    );
+    expect(ra[0]).toBeNull();
+    expect(rb[0]).toBeNull();
+    const stripIds = (path: NavigationAction[]): string =>
+      path
+        .map((x): string => {
+          const t = { ...x.toTelemetry() };
+          delete t.action_id;
+          return JSON.stringify(t);
+        })
+        .join('|');
+    expect(stripIds(ra[1]!.path)).toBe(stripIds(rb[1]!.path));
+  });
+});
+
+describe('NavigationController probe lifecycle', () => {
+  test('does not subscribe physicsTick listener by default', () => {
+    const bot = new EventEmitter() as unknown as Bot;
+
+    (
+      bot as unknown as {
+        entity: Bot['entity'];
+        time: { age: number };
+      }
+    ).entity = {
+      position: {
+        distanceTo(): number {
+          return 999;
+        },
+      },
+    } as unknown as Bot['entity'];
+    (
+      bot as unknown as {
+        time: { age: number };
+      }
+    ).time = { age: 0 };
+
+    bot.blockAt = (): null => null;
+    bot.entities = {};
+    bot.setControlState = (): void => {};
+
+    new NavigationController(bot);
+
+    const ee = bot as unknown as EventEmitter;
+
+    expect(ee.listenerCount('physicsTick')).toBe(0);
+    let pulse = 0;
+    while (pulse < 200) {
+      ee.emit('physicsTick');
+      pulse += 1;
+    }
+    expect(ee.listenerCount('physicsTick')).toBe(0);
+  });
+});
+
+describe('HostileOccupiesCell', () => {
+  test('hostile in head voxel blocks standing', () => {
+    const w = new FixtureWorld();
+    w.platformXZ(64, 5, 4, 5, 6);
+    w.putCell(5, 65, 5, solidGroundCell());
+    w.putCell(5, 67, 5, emptyAirCell());
+    w.addHostileFoot(5, 67, 5);
+
+    expect(Collision.canStandAt(w, new Node(5, 66, 5, new Set()))).toBe(false);
+  });
+
+  test('hostile two cells below feet does not block stand node', () => {
+    const w = new FixtureWorld();
+    w.platformXZ(64, 5, 4, 5, 6);
+    w.putCell(5, 65, 5, solidGroundCell());
+    w.putCell(5, 67, 5, emptyAirCell());
+    w.addHostileFoot(5, 64, 5);
+
+    expect(Collision.canStandAt(w, new Node(5, 66, 5, new Set()))).toBe(true);
+  });
+});
+
+describe('Collision vertical moves', () => {
+  test('dropLanding finds standable within safe depth and null when too deep', () => {
+    const w = new FixtureWorld();
+    w.platformXZ(64, 0, 0, 2, 0);
+    w.putCell(1, 64, 0, emptyAirCell());
+    w.putCell(1, 62, 0, solidGroundCell());
+    w.putCell(1, 63, 0, emptyAirCell());
+
+    const land = Collision.dropLanding(w, new Node(0, 65, 0, new Set()), 1, 0);
+    expect(land).not.toBeNull();
+    expect(land!.y).toBe(63);
+
+    w.putCell(1, 61, 0, solidGroundCell());
+    w.putCell(1, 62, 0, emptyAirCell());
+
+    expect(
+      Collision.dropLanding(w, new Node(0, 66, 0, new Set()), 1, 0),
+    ).toBeNull();
+  });
+
+  test('canJumpUpAdjacent clears thin step blocked by overhead solid', () => {
+    const w = new FixtureWorld();
+    w.platformXZ(64, 0, 0, 1, 0);
+    w.putCell(1, 65, 0, THIN_FLOOR);
+    w.putCell(1, 66, 0, emptyAirCell());
+
+    expect(
+      Collision.canJumpUpAdjacent(w, new Node(0, 65, 0, new Set()), 1, 0),
+    ).toBe(true);
+
+    w.putCell(1, 67, 0, solidGroundCell());
+
+    expect(
+      Collision.canJumpUpAdjacent(w, new Node(0, 65, 0, new Set()), 1, 0),
+    ).toBe(false);
+  });
+
+  test('findClosedDoorBlockingWalk skips upper door half slot', () => {
+    const w = new FixtureWorld();
+    w.platformXZ(64, 3, 0, 9, 0);
+    w.addClosedDoor(5, 64, 0);
+    w.addClosedDoor(5, 65, 0);
+    const from = new Node(4, 65, 0, new Set());
+    expect(Collision.findClosedDoorBlockingWalk(w, from, 1, 0)?.y).toBe(64);
+  });
+});
+
+describe('Telemetry observed', () => {
+  test('movement_fail emits validator observed payloads', () => {
+    const rec = new CaptureRecorder('telemetry');
+    const mem = new EdgeMemory();
+    const r = new Recovery(14, 6, mem, rec);
+    void r.recordVerifiedFailure(
+      '0,0,0',
+      '1,0,0',
+      'walk',
+      0,
+      'post_foot_mismatch',
+      'post_action',
+      new WalkAction(
+        'a',
+        new Node(0, 65, 0).key,
+
+        new Node(1, 65, 0).key,
+
+        1,
+        0,
+      ),
+      new ValidationError('post_foot_mismatch', {
+        expected: { x: 1, y: 65, z: 0 },
+        got: { x: 0, y: 65, z: 0 },
+      }).observed,
+    );
+
+    const hit = rec.frames.find(
+      (f): boolean => f.type === NAV_EVENT.MOVEMENT_FAIL,
+    );
+    expect(hit?.data?.observed).toEqual({
+      expected: { x: 1, y: 65, z: 0 },
+      got: { x: 0, y: 65, z: 0 },
+    });
+  });
+});
+
+describe('Pathfinding jumps', () => {
+  test('uses jump_up with thin-floor step geometry', () => {
+    const w = new FixtureWorld();
+    w.platformXZ(64, 0, 0, 1, 0);
+    w.putCell(1, 65, 0, THIN_FLOOR);
+    w.putCell(1, 66, 0, emptyAirCell());
+
+    const r = AStar.search(
+      w,
+
+      new Node(0, 65, 0),
+      new Node(1, 66, 0),
+      new EdgeMemory(),
+      0,
+      'ju',
+    );
+    expect(r[0]).toBeNull();
+    expect(r[1]!.path.some((a): boolean => a.kind === 'jump_up')).toBe(true);
   });
 });

@@ -7,6 +7,7 @@ import { SearchEdge } from '../planner/Edge';
 import type { ActionKind } from '../movement/Actions';
 
 const PENALTY_BUMP = 5;
+const MAX_LEARNED_ADD = 40;
 const HALF_LIFE_TICKS = 200;
 const DECAY_PER_HALF_LIFE = 0.5;
 
@@ -66,7 +67,7 @@ export class EdgeMemory {
 
     this.applyDecayForRow(prev, tick);
     prev.failureCount += 1;
-    prev.learnedAdd += PENALTY_BUMP;
+    prev.learnedAdd = Math.min(prev.learnedAdd + PENALTY_BUMP, MAX_LEARNED_ADD);
     prev.lastFailureTick = tick;
     this.schedulePersistMaybe();
     return prev;
@@ -108,6 +109,35 @@ export class EdgeMemory {
     return this.persistToDiskInternal();
   }
 
+  private static parseJson(raw: string): Result<unknown> {
+    try {
+      return ok(JSON.parse(raw) as unknown);
+    } catch (err: unknown) {
+      if (err instanceof Error) return fail(err);
+      return fail(new Error('edge_memory_parse'));
+    }
+  }
+
+  private static readFileSafe(path: string): Result<string> {
+    try {
+      return ok(readFileSync(path, 'utf8'));
+    } catch (err: unknown) {
+      if (err instanceof Error) return fail(err);
+      return fail(new Error('edge_memory_read'));
+    }
+  }
+
+  private static writeFileSafe(path: string, body: string): Result<null> {
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body, 'utf8');
+      return ok(null);
+    } catch (err: unknown) {
+      if (err instanceof Error) return fail(err);
+      return fail(new Error('edge_memory_write'));
+    }
+  }
+
   private schedulePersistMaybe(): void {
     if (this.persistPath === undefined) return;
 
@@ -120,83 +150,79 @@ export class EdgeMemory {
 
   private loadQuiet(): void {
     if (this.persistPath === undefined) return;
+    if (!existsSync(this.persistPath)) return;
 
-    try {
-      if (!existsSync(this.persistPath)) return;
-      const raw = readFileSync(this.persistPath, 'utf8');
-      const parsed = JSON.parse(raw) as PersistPayload | null;
-      if (parsed?.v !== 1) return;
-      if (!Array.isArray(parsed.rows)) return;
+    const [readErr, raw] = EdgeMemory.readFileSafe(this.persistPath);
+    if (readErr) return;
+    if (raw === null) return;
 
-      this.rows.clear();
-      for (const entry of parsed.rows) {
-        if (typeof entry.id !== 'string') continue;
+    const [parseErr, parsed] = EdgeMemory.parseJson(raw);
+    if (parseErr) return;
+    if (parsed === null) return;
 
-        const row: EdgeRow = {
-          failureCount: entry.failureCount,
-          learnedAdd: entry.learnedAdd,
-          lastFailureTick: entry.lastFailureTick,
-          lastDecayTick: entry.lastDecayTick,
-        };
+    const payload = parsed as PersistPayload | null;
+    if (payload?.v !== 1) return;
+    if (!Array.isArray(payload.rows)) return;
 
-        if (!Number.isFinite(row.failureCount)) continue;
+    this.rows.clear();
+    for (const entry of payload.rows) {
+      if (typeof entry.id !== 'string') continue;
 
-        if (!Number.isFinite(row.learnedAdd)) continue;
+      const row: EdgeRow = {
+        failureCount: entry.failureCount,
+        learnedAdd: entry.learnedAdd,
+        lastFailureTick: entry.lastFailureTick,
+        lastDecayTick: entry.lastDecayTick,
+      };
 
-        if (!Number.isFinite(row.lastFailureTick)) continue;
+      if (!Number.isFinite(row.failureCount)) continue;
 
-        if (!Number.isFinite(row.lastDecayTick)) continue;
+      if (!Number.isFinite(row.learnedAdd)) continue;
 
-        this.rows.set(entry.id, row);
-      }
+      if (!Number.isFinite(row.lastFailureTick)) continue;
 
-      return;
-    } catch (_e: unknown) {
-      return;
+      if (!Number.isFinite(row.lastDecayTick)) continue;
+
+      this.rows.set(entry.id, row);
     }
   }
 
   private persistToDiskInternal(): Result<null> {
     if (this.persistPath === undefined) return ok(null);
 
-    try {
-      const entries = [...this.rows.entries()];
-      entries.sort((a, b): number => {
-        const db = b[1].lastFailureTick - a[1].lastFailureTick;
-        if (db !== 0) return db;
-        if (a[0] < b[0]) return -1;
-        if (a[0] > b[0]) return 1;
-        return 0;
-      });
+    const entries = [...this.rows.entries()];
+    entries.sort((a, b): number => {
+      const db = b[1].lastFailureTick - a[1].lastFailureTick;
+      if (db !== 0) return db;
+      if (a[0] < b[0]) return -1;
+      if (a[0] > b[0]) return 1;
+      return 0;
+    });
 
-      const cappedPairs =
-        entries.length > this.maxEntries
-          ? entries.slice(0, this.maxEntries)
-          : entries;
+    const cappedPairs =
+      entries.length > this.maxEntries
+        ? entries.slice(0, this.maxEntries)
+        : entries;
 
-      const payload: PersistPayload = {
-        v: 1,
-        rows: cappedPairs.map(([id, row]): EdgeRow & { id: string } => ({
-          id,
-          ...row,
-        })),
-      };
+    const payload: PersistPayload = {
+      v: 1,
+      rows: cappedPairs.map(([id, row]): EdgeRow & { id: string } => ({
+        id,
+        ...row,
+      })),
+    };
 
-      const body = JSON.stringify(payload);
-      mkdirSync(dirname(this.persistPath), { recursive: true });
-      writeFileSync(this.persistPath, body, 'utf8');
+    const [writeErr] = EdgeMemory.writeFileSafe(
+      this.persistPath,
+      JSON.stringify(payload),
+    );
+    if (writeErr) return fail(writeErr);
 
-      if (entries.length <= this.maxEntries) return ok(null);
+    if (entries.length <= this.maxEntries) return ok(null);
 
-      this.rows.clear();
-      for (const [id, row] of cappedPairs) this.rows.set(id, row);
-
-      return ok(null);
-    } catch (err: unknown) {
-      if (err instanceof Error) return fail(err);
-
-      return fail(new Error('edge_memory_persist'));
-    }
+    this.rows.clear();
+    for (const [id, row] of cappedPairs) this.rows.set(id, row);
+    return ok(null);
   }
 
   private applyDecayForRow(row: EdgeRow, tick: number): void {

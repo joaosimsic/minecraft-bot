@@ -17,3 +17,5 @@
 6. No comments
 7. Apply vertical spacing between unrelated logic: leave blank lines so each coherent block stays grouped and dense runs of unrelated lines are avoided
 8. Run prettier to format files after changes
+
+# Run tests after changes

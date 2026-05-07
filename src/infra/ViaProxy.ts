@@ -164,8 +164,14 @@ export class ViaProxy {
       stderr: 'pipe',
     });
 
-    ViaProxy.pumpStream(this.proc.stdout, this.log);
-    ViaProxy.pumpStream(this.proc.stderr, this.log);
+    ViaProxy.pumpStream(
+      this.proc.stdout as ReadableStream<Uint8Array> | undefined,
+      this.log,
+    );
+    ViaProxy.pumpStream(
+      this.proc.stderr as ReadableStream<Uint8Array> | undefined,
+      this.log,
+    );
 
     void this.proc.exited.then(() => {
       this.log.info('exited code', this.proc?.exitCode);

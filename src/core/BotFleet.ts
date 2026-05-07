@@ -23,7 +23,7 @@ export class BotFleet {
   private readonly kernels = new Map<string, BotKernel>();
   private readonly onlineIds = new Set<string>();
   private readonly phaseById = new Map<string, BotPhase>();
-  private readonly lastErrorById = new Map<string, string>();
+  private readonly lastErrorById = new Map<string, string | null>();
   private focusedBotId = '';
   private statusRefresh: () => void = (): void => undefined;
   private statusTimer: NodeJS.Timeout | null = null;

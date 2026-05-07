@@ -1,7 +1,3 @@
-# Task
-
-I have the old/ folder on root that were pretty badly built, so I'm refactoring it. I'm placing the new code on src/
-
 # Constrains
 
 1. No try-catch (except at the absolute outermost boundary if forced by external libraries, but immediately convert to a tuple return)
@@ -9,7 +5,7 @@ I have the old/ folder on root that were pretty badly built, so I'm refactoring 
 3. No else if or else (use early returns/guard clauses instead)
 4. Minimum indentation as possible
 5. Pay attention to performance and maintainability
-6. When comparing or working with a list, use sets for better performance and maintainability
+6. When comparing or working with a list, use sets 
 
 # Style
 

@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "s": "bun src/main.ts",
-    "test": "bun test"
+    "test": "bun --env-file=.env.example test"
   },
   "devDependencies": {
     "@types/bun": "latest"

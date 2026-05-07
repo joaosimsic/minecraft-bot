@@ -18,7 +18,7 @@ export class GuidedMode implements BotMode {
       await Utils.sleep(1000);
       return;
     }
-    await this.navigator.walkTo(t);
-    this.target = null;
+    const reached = await this.navigator.walkTo(t);
+    if (reached) this.target = null;
   }
 }

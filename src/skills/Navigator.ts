@@ -16,7 +16,7 @@ export class Navigator {
   private readonly log = new Logger('Navigator');
   private readonly pbot: PathfinderBot;
 
-  constructor(
+  public constructor(
     bot: Bot,
     private readonly door: Door,
   ) {
@@ -24,7 +24,7 @@ export class Navigator {
   }
 
   public async walkTo(target: Vec3, range = 1): Promise<boolean> {
-    if (this.pbot.entity.position.distanceTo(target) < range) return true;
+    if (this.pbot.entity.position.distanceTo(target) <= range) return true;
 
     const moves = this.buildMovements();
 
@@ -72,7 +72,7 @@ export class Navigator {
     let attempts = 0;
 
     while (attempts < MAX_ATTEMPTS) {
-      if (this.pbot.entity.position.distanceTo(target) < range) return true;
+      if (this.pbot.entity.position.distanceTo(target) <= range) return true;
 
       this.log.info(
         `pathfinding attempt ${attempts + 1} to`,
@@ -88,7 +88,7 @@ export class Navigator {
 
       if (attempts >= MAX_ATTEMPTS) break;
 
-      await this.unstick();
+      await this.unstick(target);
 
       const moves = this.buildMovements();
       if (!this.isGoalReachable(target, moves)) {
@@ -102,12 +102,53 @@ export class Navigator {
     return false;
   }
 
-  private async unstick(): Promise<void> {
-    this.log.info('unsticking');
-    this.pbot.setControlState('back', true);
+  private async unstick(target: Vec3): Promise<void> {
+    this.log.info('unsticking safely');
+
+    const pos = this.pbot.entity.position;
+    const yaw = this.pbot.entity.yaw;
+
+    const backX = Math.sin(yaw);
+    const backZ = Math.cos(yaw);
+    const leftX = Math.cos(yaw);
+    const leftZ = -Math.sin(yaw);
+
+    const behindFloor = this.pbot.blockAt(
+      new Vec3(pos.x + backX, pos.y - 1, pos.z + backZ),
+    );
+    const canGoBack =
+      behindFloor !== null &&
+      behindFloor.boundingBox !== 'empty' &&
+      behindFloor.name !== 'lava';
+
+    const leftFloor = this.pbot.blockAt(
+      new Vec3(pos.x + leftX, pos.y - 1, pos.z + leftZ),
+    );
+    const canGoLeft =
+      leftFloor !== null &&
+      leftFloor.boundingBox !== 'empty' &&
+      leftFloor.name !== 'lava';
+
+    if (canGoBack) this.pbot.setControlState('back', true);
+    if (canGoLeft) this.pbot.setControlState('left', true);
+
+    this.pbot.setControlState('jump', true);
+
     await Utils.sleep(800);
+
     this.pbot.setControlState('back', false);
+    this.pbot.setControlState('left', false);
+    this.pbot.setControlState('jump', false);
     await Utils.sleep(200);
+
+    const newPos = this.pbot.entity.position;
+    const [lookErr] = await wrap(
+      this.pbot.lookAt(new Vec3(target.x, newPos.y + 1.6, target.z)),
+    );
+    if (lookErr) this.log.warn('look-after-unstick failed', lookErr.message);
+
+    await this.door.openDoorsAhead();
+    await Utils.sleep(300);
   }
 
   private async stepToward(target: Vec3, range: number): Promise<StepResult> {
@@ -117,14 +158,24 @@ export class Navigator {
       ),
     );
 
-    if (!err) return 'reached';
+    if (!err) {
+      const dist = this.pbot.entity.position.distanceTo(target);
+      if (dist > range + 2) {
+        this.log.warn(
+          `pathfinder resolved but dist=${dist.toFixed(1)}, retrying`,
+        );
+        return 'timeout';
+      }
+      this.log.info('reached goal');
+      return 'reached';
+    }
 
     if (err.name === 'NoPath') {
       this.log.warn('no path to goal');
       return 'nopath';
     }
-    this.log.info('partial path (timeout), continuing from new position');
 
+    this.log.info('partial path (timeout), continuing from new position');
     return 'timeout';
   }
 
@@ -148,6 +199,26 @@ export class Navigator {
       );
       if (lookErr) this.log.warn('lookAt failed', lookErr.message);
 
+      const yaw = this.pbot.entity.yaw;
+      const fdx = Math.round(-Math.sin(yaw));
+      const fdz = Math.round(-Math.cos(yaw));
+      const frontPos = new Vec3(
+        Math.floor(pos.x + fdx),
+        Math.floor(pos.y),
+        Math.floor(pos.z + fdz),
+      );
+      const frontBlock = this.pbot.blockAt(frontPos);
+
+      if (frontBlock && this.door.isDoor(frontBlock.name)) {
+        const [realignErr] = await wrap(
+          this.pbot.lookAt(
+            new Vec3(frontPos.x + 0.5, pos.y + 1.6, frontPos.z + 0.5),
+          ),
+        );
+        if (realignErr)
+          this.log.warn('door realign failed', realignErr.message);
+      }
+
       await this.door.openDoorsAhead();
 
       this.pbot.setControlState('forward', true);
@@ -159,7 +230,10 @@ export class Navigator {
           Math.floor(pos.z + Math.sign(dz) * 0.5),
         ),
       );
-      this.pbot.setControlState('jump', front !== null && front.name !== 'air');
+      this.pbot.setControlState(
+        'jump',
+        front !== null && front.name !== 'air' && !this.door.isDoor(front.name),
+      );
 
       await Utils.sleep(250);
     }

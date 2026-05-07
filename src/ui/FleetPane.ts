@@ -23,6 +23,7 @@ export class FleetPane {
   public constructor(
     frame: ScreenFrame,
     onFleetRowSelect: (id: string) => void,
+    private readonly onQuit: () => void,
   ) {
     this.frame = frame;
     this.onFleetRowSelect = onFleetRowSelect;
@@ -107,6 +108,10 @@ export class FleetPane {
         this.onFleetRowSelect(id);
       },
     );
+
+    this.fleetTable.key(['C-c'], (): void => {
+      this.onQuit();
+    });
   }
 
   public updateStatus(

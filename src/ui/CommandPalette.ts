@@ -11,6 +11,7 @@ export class CommandPalette {
   private readonly getMacroNames: () => string[];
   private readonly onPickItem: (item: string) => void;
   private readonly onCancelPalette: () => void;
+  private readonly onQuit: () => void;
   private readonly box: blessed.Widgets.BoxElement;
   private readonly search: blessed.Widgets.TextboxElement;
   private readonly list: blessed.Widgets.ListElement;
@@ -24,12 +25,14 @@ export class CommandPalette {
     getMacroNames: () => string[],
     onPickItem: (item: string) => void,
     onCancelPalette: () => void,
+    onQuit: () => void,
   ) {
     this.frame = frame;
     this.getIds = getIds;
     this.getMacroNames = getMacroNames;
     this.onPickItem = onPickItem;
     this.onCancelPalette = onCancelPalette;
+    this.onQuit = onQuit;
 
     this.box = blessed.box({
       parent: frame.screen,
@@ -73,6 +76,13 @@ export class CommandPalette {
     this.box.key(['escape'], (): void => {
       this.cancel();
     });
+
+    const quitApp = (): void => {
+      this.onQuit();
+    };
+    this.box.key(['C-c'], quitApp);
+    this.search.key(['C-c'], quitApp);
+    this.list.key(['C-c'], quitApp);
 
     this.search.on('keypress', (): void => {
       queueMicrotask((): void => this.refreshMatches());

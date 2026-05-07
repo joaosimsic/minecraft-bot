@@ -15,6 +15,7 @@ type LogTabCmd = {
 export class LogPane {
   private readonly logStore = new LogStore();
   private readonly frame: ScreenFrame;
+  private readonly onQuit: () => void;
   private focusInput: () => void = (): void => undefined;
   private readonly logTabBar: blessed.Widgets.ListbarElement;
   private readonly logArea: blessed.Widgets.BoxElement;
@@ -30,8 +31,9 @@ export class LogPane {
   private multiLayoutKey = '';
   private lastOnlineBotIds: string[] = [];
 
-  public constructor(frame: ScreenFrame) {
+  public constructor(frame: ScreenFrame, onQuit: () => void) {
     this.frame = frame;
+    this.onQuit = onQuit;
     const screen = this.frame.screen;
 
     this.logTabBar = blessed.listbar({
@@ -90,6 +92,10 @@ export class LogPane {
     this.logBox.key(['escape'], (): void => {
       this.focusInput();
       this.scheduleRender();
+    });
+
+    this.logBox.key(['C-c'], (): void => {
+      this.onQuit();
     });
 
     this.lastLogTabIds = [];
@@ -201,6 +207,9 @@ export class LogPane {
     box.key(['escape'], (): void => {
       this.focusInput();
       this.scheduleRender();
+    });
+    box.key(['C-c'], (): void => {
+      this.onQuit();
     });
   }
 

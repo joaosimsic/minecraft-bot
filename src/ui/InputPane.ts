@@ -26,9 +26,12 @@ export class InputPane {
       keys: true,
     });
 
-    this.textbox.on('keypress', (ch: string, key: { name?: string }): void => {
-      this.handleInputKeypress(ch, key);
-    });
+    this.textbox.on(
+      'keypress',
+      (ch: string | undefined, key: { name?: string }): void => {
+        this.handleInputKeypress(ch, key);
+      },
+    );
   }
 
   public bindEscapeFromInput(fn: () => void): void {
@@ -100,9 +103,16 @@ export class InputPane {
     });
   }
 
-  private handleInputKeypress(ch: string, key: { name?: string }): void {
+  private handleInputKeypress(
+    ch: string | undefined,
+    key: { name?: string },
+  ): void {
     if (key.name !== 'up' && key.name !== 'down') {
-      if (ch.length > 0 || key.name === 'enter' || key.name === 'return')
+      if (
+        (ch?.length ?? 0) > 0 ||
+        key.name === 'enter' ||
+        key.name === 'return'
+      )
         this.histBrowse = null;
     }
 

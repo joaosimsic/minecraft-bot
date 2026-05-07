@@ -40,7 +40,6 @@ export class UIManager implements InputUiBridge {
   private readonly getMacroNames: () => string[];
   private readonly helpBox: blessed.Widgets.BoxElement;
   private readonly botsOverlay: blessed.Widgets.BoxElement;
-  private readonly question: blessed.Widgets.QuestionElement;
   private readonly minSizeBox: blessed.Widgets.BoxElement;
   private readonly commandPalette: CommandPalette;
   private onFleetFocusCb: (id: string) => void = (): void => undefined;
@@ -56,9 +55,11 @@ export class UIManager implements InputUiBridge {
     this.getMacroNames = getMacroNames;
     this.frame = new ScreenFrame('minecraft-bot');
 
-    this.logPane = new LogPane(this.frame);
-    this.fleetPane = new FleetPane(this.frame, (id): void =>
-      this.onFleetFocusCb(id),
+    this.logPane = new LogPane(this.frame, (): void => this.onQuit());
+    this.fleetPane = new FleetPane(
+      this.frame,
+      (id): void => this.onFleetFocusCb(id),
+      (): void => this.onQuit(),
     );
     this.inputPane = new InputPane(this.frame);
 
@@ -110,16 +111,6 @@ export class UIManager implements InputUiBridge {
       content: '',
     });
 
-    this.question = blessed.question({
-      parent: this.frame.screen,
-      border: 'line',
-      height: 5,
-      width: 'half',
-      top: 'center',
-      left: 'center',
-      hidden: true,
-    });
-
     this.minSizeBox = blessed.box({
       parent: this.frame.screen,
       top: 0,
@@ -148,9 +139,14 @@ export class UIManager implements InputUiBridge {
         this.inputPane.focusInput();
         this.scheduleRender();
       },
+      (): void => this.onQuit(),
     );
 
     this.frame.screen.key(['C-c'], (): void => {
+      this.onQuit();
+    });
+
+    this.inputPane.textbox.key(['C-c'], (): void => {
       this.onQuit();
     });
 
@@ -163,8 +159,6 @@ export class UIManager implements InputUiBridge {
     });
 
     const togglePalette = (): void => {
-      if (!this.question.hidden) return;
-
       if (this.commandPalette.isOpen()) {
         this.commandPalette.cancel();
         return;
@@ -188,8 +182,16 @@ export class UIManager implements InputUiBridge {
       this.hideHelp();
     });
 
+    this.helpBox.key(['C-c'], (): void => {
+      this.onQuit();
+    });
+
     this.botsOverlay.key(['escape', 'q', 'Q'], (): void => {
       this.hideBotsOverlay();
+    });
+
+    this.botsOverlay.key(['C-c'], (): void => {
+      this.onQuit();
     });
 
     this.inputPane.textbox.key(['tab'], (): void => {
@@ -227,25 +229,6 @@ export class UIManager implements InputUiBridge {
 
   public applyTabCompletion(ids: string[]): void {
     this.inputPane.applyTabCompletion(ids);
-  }
-
-  public confirmExitIfActive(activeBots: number, onYes: () => void): void {
-    if (activeBots === 0) {
-      onYes();
-      return;
-    }
-    const msg = `${activeBots} bot(s) active — quit anyway? [y/N]`;
-    this.question.ask(msg, (_err: unknown, val?: unknown): void => {
-      const yn =
-        val === true ||
-        val === 'y' ||
-        val === 'Y' ||
-        val === 'yes' ||
-        val === 'Yes';
-      if (yn) onYes();
-      this.inputPane.focusInput();
-      this.scheduleRender();
-    });
   }
 
   public showBotsOverlay(body: string): void {

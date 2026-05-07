@@ -10,7 +10,6 @@ import {
 import type { MacroStore } from './MacroStore';
 
 export type InputUiBridge = {
-  confirmExitIfActive(activeNonIdle: number, onYes: () => void): void;
   showHelp(): void;
   setLogFilter(botId: string | null): void;
   setLogLevelMin(level: LogLevel | null): void;
@@ -153,11 +152,8 @@ export class InputHandler {
     }
 
     if (line === 'exit') {
-      const n = this.fleet.activeNonIdleOnlineCount();
-      this.ui.confirmExitIfActive(n, (): void => {
-        this.fleet.haltAll();
-        this.onExit();
-      });
+      this.fleet.haltAll();
+      this.onExit();
       return;
     }
 
@@ -202,11 +198,8 @@ export class InputHandler {
     if (trimmed.length === 0) return;
 
     if (trimmed === 'exit') {
-      const n = this.fleet.activeNonIdleOnlineCount();
-      this.ui.confirmExitIfActive(n, (): void => {
-        this.fleet.haltAll();
-        this.onExit();
-      });
+      this.fleet.haltAll();
+      this.onExit();
       return;
     }
 

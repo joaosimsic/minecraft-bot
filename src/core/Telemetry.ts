@@ -1,6 +1,6 @@
 import type { Bot } from 'mineflayer';
 import { Logger } from '../shared/Logger';
-import { metrics } from '../shared/Metrics';
+import type { Metrics } from '../shared/Metrics';
 
 type EntityPos = Bot['entity']['position'];
 
@@ -28,6 +28,7 @@ export class Telemetry {
     private readonly summaryMs: number,
     private readonly trailMinBlocks: number,
     botId: string,
+    private readonly metrics: Metrics,
   ) {
     this.log = new Logger('Telemetry', botId);
   }
@@ -49,7 +50,7 @@ export class Telemetry {
       if (!e) return;
       this.lastTrailPos = e.position.clone();
       this.lastMovePos = e.position.clone();
-      metrics.pushPos(
+      this.metrics.pushPos(
         +e.position.x.toFixed(2),
         +e.position.y.toFixed(2),
         +e.position.z.toFixed(2),
@@ -57,12 +58,12 @@ export class Telemetry {
     });
 
     this.bot.on('death', (): void => {
-      metrics.inc('deaths');
+      this.metrics.inc('deaths');
       this.log.event('death');
     });
 
     this.bot.on('kicked', (reason: string): void => {
-      metrics.inc('kicks');
+      this.metrics.inc('kicks');
       this.log.event('kicked', { reason });
     });
 
@@ -77,7 +78,7 @@ export class Telemetry {
     );
 
     this.bot.on('chat', (user: string, msg: string): void => {
-      metrics.inc('chats');
+      this.metrics.inc('chats');
       this.log.event('chat', { user, msg });
     });
 
@@ -85,7 +86,7 @@ export class Telemetry {
 
     this.bot.on('forcedMove', (): void => {
       const p = this.bot.entity.position;
-      metrics.inc('forced_moves');
+      this.metrics.inc('forced_moves');
       this.log.event('forced_move', {
         pos: { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2) },
       });
@@ -101,7 +102,7 @@ export class Telemetry {
 
     if (this.lastMovePos !== null) {
       const moved = p.distanceTo(this.lastMovePos);
-      if (moved > 0) metrics.add('distance_walked', moved);
+      if (moved > 0) this.metrics.add('distance_walked', moved);
     }
     this.lastMovePos = p.clone();
 
@@ -115,7 +116,7 @@ export class Telemetry {
       const px = +p.x.toFixed(2);
       const py = +p.y.toFixed(2);
       const pz = +p.z.toFixed(2);
-      metrics.pushPos(px, py, pz);
+      this.metrics.pushPos(px, py, pz);
       this.log.event('position', {
         pos: { x: px, y: py, z: pz },
         delta: +trailDelta.toFixed(3),
@@ -156,7 +157,7 @@ export class Telemetry {
       return;
     }
 
-    metrics.inc(`collision.${axis}`);
+    this.metrics.inc(`collision.${axis}`);
     const fdx = Math.round(-Math.sin(yaw));
     const fdz = Math.round(-Math.cos(yaw));
     const frontPos = p.floored().offset(fdx, 0, fdz);
@@ -178,7 +179,7 @@ export class Telemetry {
   }
 
   private dumpSummary(): void {
-    const s = metrics.summary();
+    const s = this.metrics.summary();
     this.log.info('summary', JSON.stringify(s.counters));
     this.log.event('summary', {
       uptimeMs: s.uptimeMs,

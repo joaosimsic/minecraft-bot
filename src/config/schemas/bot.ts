@@ -30,4 +30,10 @@ export const botSchema = {
     .int()
     .min(1)
     .default(10),
+
+  REPLAY_JSONL: z.string().min(1).optional(),
+
+  WEB_BIND: z.string().min(1).default('127.0.0.1'),
+  WEB_PORT: z.coerce.number().int().min(1).max(65535).default(8787),
+  WEB_COMPANION: z.enum(['0', '1']).optional(),
 };

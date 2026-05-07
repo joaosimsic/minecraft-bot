@@ -1,5 +1,5 @@
 import { Logger } from '../shared/Logger';
-import { metrics } from '../shared/Metrics';
+import type { Metrics } from '../shared/Metrics';
 import type { BotMode } from '../modes/BotMode';
 import { IdleMode } from '../modes/IdleMode';
 
@@ -9,6 +9,7 @@ export class ModeController {
 
   public constructor(
     private readonly log: Logger,
+    private readonly metrics: Metrics,
     private readonly onModeUi: () => void,
   ) {}
 
@@ -19,7 +20,7 @@ export class ModeController {
   public switchTo(mode: BotMode): void {
     const from = this.currentMode.constructor.name;
     const to = mode.constructor.name;
-    metrics.inc('mode.switch');
+    this.metrics.inc('mode.switch');
     this.log.info('mode ->', to);
     this.log.decision('mode_switch', 'controller_request', { from, to });
     this.log.event('mode_switch', { from, to });
@@ -29,7 +30,7 @@ export class ModeController {
   }
 
   public stop(): void {
-    metrics.inc('mode.stop');
+    this.metrics.inc('mode.stop');
     this.log.info('pausing');
     this.log.decision('mode_stop', 'controller_request', {
       from: this.currentMode.constructor.name,
@@ -45,6 +46,11 @@ export class ModeController {
     this.log.event('halt');
     this.active = false;
     this.onModeUi();
+  }
+
+  public isIdle(): boolean {
+    if (!this.active) return true;
+    return this.currentMode instanceof IdleMode;
   }
 
   public async run(): Promise<void> {

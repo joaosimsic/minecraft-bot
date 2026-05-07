@@ -2,7 +2,7 @@ import type { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
 import { Logger } from '../shared/Logger';
 import { wrap } from '../shared/result';
-import { metrics } from '../shared/Metrics';
+import type { Metrics } from '../shared/Metrics';
 import { NavigationController } from '../navigation/NavigationController';
 
 export class Navigator {
@@ -14,6 +14,7 @@ export class Navigator {
     bot: Bot,
     navigation: NavigationController,
     botId: string,
+    private readonly metrics: Metrics,
   ) {
     this.bot = bot;
     this.navigation = navigation;
@@ -28,7 +29,7 @@ export class Navigator {
     target = Navigator.centerBlock(target);
 
     const start = this.bot.entity.position;
-    metrics.inc('walk.start');
+    this.metrics.inc('walk.start');
     this.log.event('walk_start', {
       target: { x: target.x, y: target.y, z: target.z },
       from: {
@@ -45,7 +46,7 @@ export class Navigator {
     });
 
     if (start.distanceTo(target) <= range) {
-      metrics.inc('walk.already_there');
+      this.metrics.inc('walk.already_there');
       this.log.decision('walk_skip', 'already_in_range');
       this.log.event('walk_end', { ok: true, mode: 'already_there' });
       return true;
@@ -59,17 +60,17 @@ export class Navigator {
         mode: 'navigator_error',
         err: navErr.message,
       });
-      metrics.inc('walk.nav.error');
+      this.metrics.inc('walk.nav.error');
       return false;
     }
 
     if (reached) {
-      metrics.inc('walk.nav.success');
+      this.metrics.inc('walk.nav.success');
       this.log.event('walk_end', { ok: true, mode: 'navigation_stack' });
       return true;
     }
 
-    metrics.inc('walk.nav.fail');
+    this.metrics.inc('walk.nav.fail');
     this.log.decision('walk', 'failed_not_in_range');
     this.log.event('walk_end', { ok: false, mode: 'navigation_failed' });
     return false;

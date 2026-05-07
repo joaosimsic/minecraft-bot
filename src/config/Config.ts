@@ -3,6 +3,22 @@ import { Vec3 } from 'vec3';
 import { log } from './logger';
 import { envSchema, type Env } from './schemas';
 
+type RuntimeEnv = Omit<
+  Env,
+  | 'START_X'
+  | 'START_Y'
+  | 'START_Z'
+  | 'GOAL_X'
+  | 'GOAL_Y'
+  | 'GOAL_Z'
+  | 'BOT_USERS'
+> & {
+  BOT_USER: string;
+  usernames: string[];
+  home: Vec3 | null;
+  goal: Vec3 | null;
+};
+
 const result = envSchema.safeParse(process.env as NodeJS.ProcessEnv);
 
 if (!result.success) {
@@ -31,7 +47,7 @@ const multi =
 
 const usernames = multi.length > 0 ? multi : [BOT_USER];
 
-export const config = {
+export const config: { env: RuntimeEnv } = {
   env: {
     ...rest,
     BOT_USER,

@@ -1,134 +1,352 @@
 import blessed from 'blessed';
 import type { FleetRowSnapshot, FocusedStatusSnapshot } from './core/BotFleet';
-import type { UiLogLine } from './shared/Logger';
+import type { InputUiBridge } from './core/InputHandler';
+import type { LogLevel, UiLogLine } from './shared/Logger';
+import { CommandPalette } from './ui/CommandPalette';
+import { FleetPane } from './ui/FleetPane';
+import { InputPane } from './ui/InputPane';
+import { LogPane } from './ui/LogPane';
+import { ScreenFrame } from './ui/ScreenFrame';
+import type { UiEventBus } from './ui/UiEventBus';
 
-export class UIManager {
-  private readonly screen: blessed.Widgets.Screen;
-  private readonly logBox: blessed.Widgets.Log;
-  private readonly statusBox: blessed.Widgets.BoxElement;
-  private readonly inputBox: blessed.Widgets.TextboxElement;
+const HELP_TEXT = [
+  'Commands',
+  '  auto | guided | stop | ping | exit',
+  '  <x> <y> <z>  — guided target',
+  '  focus <id> | use <id>',
+  '  @<id> <cmd>  — run on named bot',
+  '  @all <cmd>   — all online bots',
+  '  :filter @id | :filter off',
+  '  :level debug|info|warn|error|off',
+  '  :save <name> "a; b"  |  :run <name>  |  :macros  |  :unsave <name>',
+  '  forget <id>  — drop disconnected bot',
+  '  bots | help | ?',
+  '  ^K — palette (fuzzy commands / @bots)',
+  '',
+  'Log: click a tab above the log (all vs each bot) or use :filter',
+  'Keys: F1 help · F2 multi-log columns · ^K palette · ^C quit · Tab · Up/Down history',
+  'CLI: --web or WEB_COMPANION=1 — browser dashboard at http://WEB_BIND:WEB_PORT',
+].join('\n');
+
+export class UIManager implements InputUiBridge {
+  private readonly frame: ScreenFrame;
+  private readonly logPane: LogPane;
+  private readonly fleetPane: FleetPane;
+  private readonly inputPane: InputPane;
+  private readonly unsubLog: () => void;
+  private readonly unsubStatus: () => void;
   private readonly onQuit: () => void;
+  private readonly getTabIds: () => string[];
+  private readonly getMacroNames: () => string[];
+  private readonly helpBox: blessed.Widgets.BoxElement;
+  private readonly botsOverlay: blessed.Widgets.BoxElement;
+  private readonly question: blessed.Widgets.QuestionElement;
+  private readonly minSizeBox: blessed.Widgets.BoxElement;
+  private readonly commandPalette: CommandPalette;
+  private onFleetFocusCb: (id: string) => void = (): void => undefined;
 
-  public constructor(onQuit: () => void) {
+  public constructor(
+    onQuit: () => void,
+    getTabIds: () => string[],
+    getMacroNames: () => string[],
+    bus: UiEventBus,
+  ) {
     this.onQuit = onQuit;
-    this.screen = blessed.screen({
-      smartCSR: true,
-      title: 'minecraft-bot',
+    this.getTabIds = getTabIds;
+    this.getMacroNames = getMacroNames;
+    this.frame = new ScreenFrame('minecraft-bot');
+
+    this.logPane = new LogPane(this.frame);
+    this.fleetPane = new FleetPane(this.frame, (id): void =>
+      this.onFleetFocusCb(id),
+    );
+    this.inputPane = new InputPane(this.frame);
+
+    this.logPane.bindFocusInput((): void => this.inputPane.focusInput());
+    this.inputPane.bindEscapeFromInput((): void =>
+      this.logPane.handleEscapeFromInput(),
+    );
+
+    this.unsubLog = bus.onLog((line): void => {
+      this.appendLogLine(line);
+    });
+    this.unsubStatus = bus.onStatus((p): void => {
+      this.updateStatus(p.focused, p.fleet, p.focusedId, p.homeXZ);
     });
 
-    this.logBox = blessed.log({
-      parent: this.screen,
-      top: 0,
-      left: 0,
-      width: '70%',
-      height: '100%-3',
+    this.helpBox = blessed.box({
+      parent: this.frame.screen,
+      top: 'center',
+      left: 'center',
+      width: '50%',
+      height: '50%',
       border: 'line',
-      label: ' log ',
-      tags: false,
-      wrap: true,
-      scrollable: true,
-      alwaysScroll: true,
-      mouse: true,
+      label: ' help (F1 / q to close) ',
+      tags: true,
+      hidden: true,
       keys: true,
       vi: true,
-      scrollbar: {
-        ch: ' ',
-        track: { bg: 'cyan' },
-        style: { inverse: true },
-      },
-    });
-
-    this.statusBox = blessed.box({
-      parent: this.screen,
-      top: 0,
-      left: '70%',
-      right: 0,
-      height: '100%-3',
-      border: 'line',
-      label: ' status ',
-      tags: false,
-      wrap: false,
+      mouse: true,
       scrollable: true,
       alwaysScroll: true,
+      content: HELP_TEXT,
     });
 
-    this.inputBox = blessed.textbox({
-      parent: this.screen,
-      bottom: 0,
+    this.botsOverlay = blessed.box({
+      parent: this.frame.screen,
+      top: 'center',
+      left: 'center',
+      width: '72%',
+      height: '62%',
+      border: 'line',
+      label: ' fleet detail (q / Esc to close) ',
+      tags: false,
+      hidden: true,
+      keys: true,
+      vi: true,
+      mouse: true,
+      scrollable: true,
+      alwaysScroll: true,
+      content: '',
+    });
+
+    this.question = blessed.question({
+      parent: this.frame.screen,
+      border: 'line',
+      height: 5,
+      width: 'half',
+      top: 'center',
+      left: 'center',
+      hidden: true,
+    });
+
+    this.minSizeBox = blessed.box({
+      parent: this.frame.screen,
+      top: 0,
       left: 0,
       width: '100%',
-      height: 3,
-      border: 'line',
-      label: ' input ',
-      inputOnFocus: true,
-      keys: true,
+      height: '100%',
+      tags: true,
+      hidden: true,
+      valign: 'middle',
+      align: 'center',
+      content:
+        '{yellow-fg}Terminal too small{/yellow-fg}\n\nNeed {bold}80{/bold} cols × {bold}20{/bold} rows minimum.\nEnlarge the window.',
+      style: { fg: 'white', bg: 'red' },
     });
 
-    this.screen.key(['escape', 'C-c'], (): void => {
+    this.commandPalette = new CommandPalette(
+      this.frame,
+      (): string[] => this.getTabIds(),
+      (): string[] => this.getMacroNames(),
+      (item): void => {
+        this.inputPane.textbox.setValue(item);
+        this.inputPane.focusInput();
+        this.scheduleRender();
+      },
+      (): void => {
+        this.inputPane.focusInput();
+        this.scheduleRender();
+      },
+    );
+
+    this.frame.screen.key(['C-c'], (): void => {
       this.onQuit();
     });
 
-    this.inputBox.focus();
+    this.frame.screen.key(['f1'], (): void => {
+      this.toggleHelp();
+    });
+
+    this.frame.screen.key(['f2'], (): void => {
+      this.logPane.toggleMultiLogMode();
+    });
+
+    const togglePalette = (): void => {
+      if (!this.question.hidden) return;
+
+      if (this.commandPalette.isOpen()) {
+        this.commandPalette.cancel();
+        return;
+      }
+
+      if (!this.helpBox.hidden) this.hideHelp();
+      if (!this.botsOverlay.hidden) this.hideBotsOverlay();
+
+      this.commandPalette.show();
+    };
+
+    this.frame.screen.key(['C-k'], togglePalette);
+    this.inputPane.textbox.key(['C-k'], togglePalette);
+
+    this.frame.screen.on('resize', (): void => {
+      this.checkMinTerminal();
+      this.scheduleRender();
+    });
+
+    this.helpBox.key(['escape', 'q', 'Q', 'f1'], (): void => {
+      this.hideHelp();
+    });
+
+    this.botsOverlay.key(['escape', 'q', 'Q'], (): void => {
+      this.hideBotsOverlay();
+    });
+
+    this.inputPane.textbox.key(['tab'], (): void => {
+      this.inputPane.applyTabCompletion([
+        ...this.getTabIds(),
+        ...this.getMacroNames(),
+      ]);
+    });
+
+    for (let n = 1; n <= 9; n += 1) {
+      const idx = n - 1;
+      this.frame.screen.key([`M-${n}`], (): void => {
+        if (this.frame.screen.focused === this.inputPane.textbox) return;
+        const id = this.fleetPane.lastFleetOrderSnapshot[idx];
+        if (id !== undefined) this.onFleetFocusCb(id);
+      });
+    }
+
+    this.checkMinTerminal();
+
+    this.inputPane.focusInput();
+  }
+
+  public onFleetFocus(handler: (id: string) => void): void {
+    this.onFleetFocusCb = handler;
+  }
+
+  public setLogFilter(botId: string | null): void {
+    this.logPane.setLogFilter(botId);
+  }
+
+  public setLogLevelMin(level: LogLevel | null): void {
+    this.logPane.setLogLevelMin(level);
+  }
+
+  public applyTabCompletion(ids: string[]): void {
+    this.inputPane.applyTabCompletion(ids);
+  }
+
+  public confirmExitIfActive(activeBots: number, onYes: () => void): void {
+    if (activeBots === 0) {
+      onYes();
+      return;
+    }
+    const msg = `${activeBots} bot(s) active — quit anyway? [y/N]`;
+    this.question.ask(msg, (_err: unknown, val?: unknown): void => {
+      const yn =
+        val === true ||
+        val === 'y' ||
+        val === 'Y' ||
+        val === 'yes' ||
+        val === 'Yes';
+      if (yn) onYes();
+      this.inputPane.focusInput();
+      this.scheduleRender();
+    });
+  }
+
+  public showBotsOverlay(body: string): void {
+    if (!this.helpBox.hidden) this.helpBox.hide();
+    this.botsOverlay.setContent(body);
+    this.botsOverlay.show();
+    this.botsOverlay.setFront();
+    this.botsOverlay.focus();
+    this.scheduleRender();
+  }
+
+  private hideBotsOverlay(): void {
+    this.botsOverlay.hide();
+    this.inputPane.focusInput();
+    this.scheduleRender();
+  }
+
+  public toggleHelp(): void {
+    if (this.helpBox.hidden) {
+      if (!this.botsOverlay.hidden) this.botsOverlay.hide();
+      this.helpBox.show();
+      this.helpBox.setFront();
+      this.helpBox.focus();
+      this.scheduleRender();
+      return;
+    }
+    this.hideHelp();
+  }
+
+  public showHelp(): void {
+    if (!this.botsOverlay.hidden) this.botsOverlay.hide();
+    if (this.helpBox.hidden) this.helpBox.show();
+    this.helpBox.setFront();
+    this.helpBox.focus();
+    this.scheduleRender();
+  }
+
+  private hideHelp(): void {
+    this.helpBox.hide();
+    this.inputPane.focusInput();
+    this.scheduleRender();
+  }
+
+  private checkMinTerminal(): void {
+    const w = Number(this.frame.screen.width);
+    const h = Number(this.frame.screen.height);
+    if (w < 80 || h < 20) {
+      this.minSizeBox.show();
+      this.minSizeBox.setFront();
+      return;
+    }
+    this.minSizeBox.hide();
+  }
+
+  public pushHistoryEntry(line: string): void {
+    this.inputPane.pushHistoryEntry(line);
   }
 
   public appendLogLine(line: UiLogLine): void {
-    const id = line.botId === null ? '—' : line.botId;
-    this.logBox.add(`[${id}] ${line.text}\n`);
-    this.screen.render();
+    this.logPane.appendLogLine(line);
   }
 
   public updateStatus(
     focused: FocusedStatusSnapshot | null,
     fleet: FleetRowSnapshot[],
+    focusedId: string,
+    homeXZ: { x: number; z: number } | null,
   ): void {
-    const focusLines =
-      focused === null
-        ? ['no focus']
-        : [
-            focused.botId,
-            `phase: ${focused.phase}`,
-            `mode: ${focused.modeLabel}`,
-            `pos: ${focused.positionLabel ?? '—'}`,
-            `err: ${focused.lastError ?? '—'}`,
-          ];
+    this.fleetPane.updateStatus(
+      focused,
+      fleet,
+      focusedId,
+      homeXZ,
+      (fid): void => this.inputPane.setFocusLabel(fid),
+    );
 
-    const fleetLines = fleet.map((r): string => {
-      const on = r.online ? 'on' : 'off';
-      const pos = r.positionLabel === null ? '—' : r.positionLabel;
-      return `${r.botId} ${on} ${r.phase} ${r.modeLabel} ${pos}`;
-    });
+    const onlineIds = fleet
+      .filter((r): boolean => r.online)
+      .map((r): string => r.botId);
+    this.logPane.onFleetRowsUpdated(fleet, onlineIds);
+  }
 
-    const text = [
-      '-- focused --',
-      ...focusLines,
-      '',
-      '-- fleet --',
-      ...fleetLines,
-    ].join('\n');
-
-    this.statusBox.setContent(text);
-    this.screen.render();
+  private scheduleRender(): void {
+    this.frame.scheduleRender();
   }
 
   public onSubmit(handler: (line: string) => void): void {
-    this.inputBox.on('submit', (value: string): void => {
-      handler(value.trim());
-      this.inputBox.clearValue();
-      this.inputBox.focus();
-      this.screen.render();
-    });
+    this.inputPane.onSubmit(handler);
   }
 
   public focusInput(): void {
-    this.inputBox.focus();
-    this.screen.render();
+    this.inputPane.focusInput();
   }
 
   public render(): void {
-    this.screen.render();
+    this.scheduleRender();
   }
 
   public destroy(): void {
-    this.screen.destroy();
+    this.unsubLog();
+    this.unsubStatus();
+    this.frame.destroy();
   }
 }

@@ -1,0 +1,254 @@
+import type {
+  BotPhase,
+  FleetRowSnapshot,
+  FocusedStatusSnapshot,
+} from '../core/BotFleet';
+import type { UiStatusPayload } from '../ui/UiEventBus';
+import type { SinkEvent } from '../shared/Sink';
+
+type Row = {
+  phase: BotPhase;
+  online: boolean;
+  modeLabel: string;
+  lastError: string | null;
+  pos: { x: number; y: number; z: number } | null;
+  health: number | null;
+  food: number | null;
+  taskLine: string | null;
+};
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  if (v === null) return null;
+  if (typeof v !== 'object') return null;
+  return v as Record<string, unknown>;
+}
+
+function readNum(o: Record<string, unknown>, k: string): number | null {
+  const x = o[k];
+  if (typeof x !== 'number' || Number.isNaN(x)) return null;
+  return x;
+}
+
+function readPos(
+  data: Record<string, unknown> | undefined,
+): { x: number; y: number; z: number } | null {
+  if (data === undefined) return null;
+  const p = data['pos'];
+  const pr = asRecord(p);
+  if (pr === null) return null;
+  const x = readNum(pr, 'x');
+  const y = readNum(pr, 'y');
+  const z = readNum(pr, 'z');
+  if (x === null || y === null || z === null) return null;
+  return { x, y, z };
+}
+
+function readString(
+  data: Record<string, unknown> | undefined,
+  k: string,
+): string | null {
+  if (data === undefined) return null;
+  const v = data[k];
+  if (typeof v !== 'string') return null;
+  return v;
+}
+
+export class ReplayState {
+  private readonly rows = new Map<string, Row>();
+  private focusedId = '';
+
+  private defaultRow(): Row {
+    return {
+      phase: 'connecting',
+      online: false,
+      modeLabel: 'IdleMode',
+      lastError: null,
+      pos: null,
+      health: null,
+      food: null,
+      taskLine: null,
+    };
+  }
+
+  private touchBot(id: string): Row {
+    let r = this.rows.get(id);
+    if (r === undefined) {
+      r = this.defaultRow();
+      this.rows.set(id, r);
+    }
+    return r;
+  }
+
+  public applyEvent(ev: SinkEvent): void {
+    const id = ev.botId;
+    if (id !== undefined && id.length > 0) this.touchBot(id);
+
+    const data = ev.data;
+    const dr = asRecord(data);
+
+    const t = ev.type;
+    if (t === 'spawn') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      r.online = true;
+      r.phase = 'running';
+      return;
+    }
+
+    if (t === 'disconnect') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      r.online = false;
+      r.phase = 'disconnected';
+      return;
+    }
+
+    if (t === 'bot_error') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      const msg = dr === null ? null : readString(dr, 'msg');
+      r.lastError = msg ?? 'error';
+      return;
+    }
+
+    if (t === 'kicked') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      const reason = dr === null ? null : readString(dr, 'reason');
+      r.lastError = reason ?? 'kicked';
+      return;
+    }
+
+    if (t === 'position' || t === 'forced_move') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      const p = readPos(dr ?? undefined);
+      if (p !== null) r.pos = p;
+      return;
+    }
+
+    if (t === 'health') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      if (dr === null) return;
+      const hp = readNum(dr, 'hp');
+      const food = readNum(dr, 'food');
+      if (hp !== null) r.health = hp;
+      if (food !== null) r.food = food;
+      return;
+    }
+
+    if (t === 'mode_switch') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      const to = dr === null ? null : readString(dr, 'to');
+      if (to !== null) r.modeLabel = to;
+      return;
+    }
+
+    if (t === 'mode_stop' || t === 'halt') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      r.modeLabel = 'IdleMode';
+      return;
+    }
+
+    if (t === 'target_set') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      if (dr === null) return;
+      const x = readNum(dr, 'x');
+      const y = readNum(dr, 'y');
+      const z = readNum(dr, 'z');
+      if (x === null || y === null || z === null) return;
+      r.taskLine = `nav (${x}, ${y}, ${z})`;
+      return;
+    }
+
+    if (t === 'target_reached' || t === 'target_failed') {
+      if (id === undefined) return;
+      const r = this.touchBot(id);
+      r.taskLine = null;
+      return;
+    }
+  }
+
+  public onlineBotIds(): string[] {
+    const out: string[] = [];
+    for (const [bid, r] of this.rows) {
+      if (r.online) out.push(bid);
+    }
+    return out.sort();
+  }
+
+  public allIds(): string[] {
+    return [...this.rows.keys()].sort();
+  }
+
+  public setFocus(botId: string): boolean {
+    if (!this.rows.has(botId)) return false;
+    this.focusedId = botId;
+    return true;
+  }
+
+  public forgetIfOffline(botId: string): boolean {
+    const r = this.rows.get(botId);
+    if (r === undefined) return false;
+    if (r.online) return false;
+    this.rows.delete(botId);
+    if (this.focusedId === botId) {
+      const next = this.allIds()[0];
+      this.focusedId = next === undefined ? '' : next;
+    }
+    return true;
+  }
+
+  private formatPosLabel(
+    p: { x: number; y: number; z: number } | null,
+  ): string | null {
+    if (p === null) return null;
+    return `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`;
+  }
+
+  public toPayload(homeXZ: { x: number; z: number } | null): UiStatusPayload {
+    const ids = this.allIds();
+    if (this.focusedId.length === 0 && ids.length > 0) this.focusedId = ids[0]!;
+
+    const fleet: FleetRowSnapshot[] = [];
+    for (const bid of ids) {
+      const r = this.rows.get(bid)!;
+      fleet.push({
+        botId: bid,
+        phase: r.phase,
+        modeLabel: r.modeLabel,
+        online: r.online,
+        lastError: r.lastError,
+        positionLabel: this.formatPosLabel(r.pos),
+        mapX: r.pos === null ? null : r.pos.x,
+        mapZ: r.pos === null ? null : r.pos.z,
+      });
+    }
+
+    const fid = this.focusedId;
+    let focused: FocusedStatusSnapshot | null = null;
+    if (fid.length > 0) {
+      const r = this.rows.get(fid);
+      if (r !== undefined) {
+        focused = {
+          botId: fid,
+          phase: r.phase,
+          modeLabel: r.modeLabel,
+          positionLabel: this.formatPosLabel(r.pos),
+          lastError: r.lastError,
+          online: r.online,
+          health: r.health,
+          food: r.food,
+          telemetryLine: 'replay',
+          taskLine: r.taskLine,
+        };
+      }
+    }
+
+    return { focused, fleet, focusedId: fid, homeXZ };
+  }
+}

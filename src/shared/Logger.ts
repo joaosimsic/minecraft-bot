@@ -1,6 +1,9 @@
 import { sink } from './Sink';
+import { sanitizeForFileLine } from './textForFile';
 
-type Level = 'info' | 'warn' | 'error' | 'debug';
+export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
+
+type Level = LogLevel;
 
 const COLORS: Record<Level, string> = {
   info: '\x1b[36m',
@@ -8,6 +11,14 @@ const COLORS: Record<Level, string> = {
   error: '\x1b[31m',
   debug: '\x1b[90m',
 };
+
+const BLESS_LEVEL: Record<Level, string> = {
+  info: 'cyan-fg',
+  warn: 'yellow-fg',
+  error: 'red-fg',
+  debug: 'gray-fg',
+};
+
 const RESET = '\x1b[0m';
 
 const CONSOLE: Record<Level, (...a: unknown[]) => void> = {
@@ -19,15 +30,40 @@ const CONSOLE: Record<Level, (...a: unknown[]) => void> = {
 
 export type UiLogLine = {
   botId: string | null;
-  level: Level;
+  level: LogLevel;
   text: string;
   ts: string;
 };
 
-let uiLineSink: ((line: UiLogLine) => void) | null = null;
+export class LogUiOutlet {
+  private fn: ((line: UiLogLine) => void) | null = null;
 
-export function setLoggerUiSink(fn: ((line: UiLogLine) => void) | null): void {
-  uiLineSink = fn;
+  public attach(handler: (line: UiLogLine) => void): void {
+    this.fn = handler;
+  }
+
+  public detach(): void {
+    this.fn = null;
+  }
+
+  public emit(line: UiLogLine): void {
+    if (this.fn === null) return;
+    this.fn(line);
+  }
+
+  public isAttached(): boolean {
+    return this.fn !== null;
+  }
+}
+
+let installedOutlet = new LogUiOutlet();
+
+export function getLogUiOutlet(): LogUiOutlet {
+  return installedOutlet;
+}
+
+export function installLogUiOutlet(outlet: LogUiOutlet): void {
+  installedOutlet = outlet;
 }
 
 const fmtArg = (a: unknown): string =>
@@ -45,21 +81,22 @@ export class Logger {
     const head = `[${iso.slice(11, 23)}][${this.prefix}]${idPart}[${level.toUpperCase()}]`;
     const body = args.map(fmtArg).join(' ');
     const fullLine = `${head} ${body}`;
+    const tag = BLESS_LEVEL[level];
+    const uiText = `{${tag}}${head}{/${tag}} ${body}`;
 
-    if (uiLineSink !== null) {
-      uiLineSink({
-        botId: this.botId ?? null,
-        level,
-        text: fullLine,
-        ts: iso,
-      });
-    }
+    const outlet = getLogUiOutlet();
+    outlet.emit({
+      botId: this.botId ?? null,
+      level,
+      text: uiText,
+      ts: iso,
+    });
 
-    if (uiLineSink === null) {
+    if (!outlet.isAttached()) {
       CONSOLE[level](`${COLORS[level]}${head}${RESET}`, ...args);
     }
 
-    sink.writeText(fullLine);
+    sink.writeText(sanitizeForFileLine(fullLine));
   }
 
   public info(...args: unknown[]): void {

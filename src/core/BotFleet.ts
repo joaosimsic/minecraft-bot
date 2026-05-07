@@ -9,6 +9,8 @@ export type FleetRowSnapshot = {
   online: boolean;
   lastError: string | null;
   positionLabel: string | null;
+  mapX: number | null;
+  mapZ: number | null;
 };
 
 export type FocusedStatusSnapshot = {
@@ -17,6 +19,11 @@ export type FocusedStatusSnapshot = {
   modeLabel: string;
   positionLabel: string | null;
   lastError: string | null;
+  online: boolean;
+  health: number | null;
+  food: number | null;
+  telemetryLine: string;
+  taskLine: string | null;
 };
 
 export class BotFleet {
@@ -26,7 +33,6 @@ export class BotFleet {
   private readonly lastErrorById = new Map<string, string | null>();
   private focusedBotId = '';
   private statusRefresh: () => void = (): void => undefined;
-  private statusTimer: NodeJS.Timeout | null = null;
 
   public setStatusRefresh(fn: () => void): void {
     this.statusRefresh = fn;
@@ -34,17 +40,6 @@ export class BotFleet {
 
   public touchStatus(): void {
     this.statusRefresh();
-  }
-
-  public startStatusTicker(): void {
-    if (this.statusTimer !== null) return;
-    this.statusTimer = setInterval((): void => this.statusRefresh(), 2000);
-  }
-
-  public stopStatusTicker(): void {
-    if (this.statusTimer === null) return;
-    clearInterval(this.statusTimer);
-    this.statusTimer = null;
   }
 
   public register(kernel: BotKernel): void {
@@ -69,13 +64,22 @@ export class BotFleet {
 
   public markDisconnected(botId: string): void {
     this.onlineIds.delete(botId);
-    this.kernels.delete(botId);
     this.phaseById.set(botId, 'disconnected');
+    this.statusRefresh();
+  }
+
+  public forget(botId: string): boolean {
+    if (!this.kernels.has(botId)) return false;
+    if (this.onlineIds.has(botId)) return false;
+    this.kernels.delete(botId);
+    this.phaseById.delete(botId);
+    this.lastErrorById.delete(botId);
     if (this.focusedBotId === botId) {
-      const next = this.firstOnlineId();
-      this.focusedBotId = next === null ? '' : next;
+      const next = [...this.kernels.keys()].sort()[0];
+      this.focusedBotId = next === undefined ? '' : next;
     }
     this.statusRefresh();
+    return true;
   }
 
   public kernelIds(): string[] {
@@ -89,10 +93,28 @@ export class BotFleet {
 
   public setFocus(botId: string): boolean {
     if (!this.kernels.has(botId)) return false;
-    if (!this.onlineIds.has(botId)) return false;
     this.focusedBotId = botId;
     this.statusRefresh();
     return true;
+  }
+
+  public onlineKernels(): BotKernel[] {
+    const out: BotKernel[] = [];
+    for (const id of this.onlineIds) {
+      const k = this.kernels.get(id);
+      if (k !== undefined) out.push(k);
+    }
+    return out;
+  }
+
+  public activeNonIdleOnlineCount(): number {
+    let n = 0;
+    for (const id of this.onlineIds) {
+      const k = this.kernels.get(id);
+      if (k === undefined) continue;
+      if (!k.controller.isIdle()) n += 1;
+    }
+    return n;
   }
 
   public focusedId(): string {
@@ -102,6 +124,17 @@ export class BotFleet {
   public kernel(botId: string): BotKernel | null {
     const k = this.kernels.get(botId);
     return k === undefined ? null : k;
+  }
+
+  public homeXZ(): { x: number; z: number } | null {
+    for (const id of this.kernelIds()) {
+      const k = this.kernels.get(id);
+      if (k === undefined) continue;
+      const h = k.runtime.home;
+      if (h === null) continue;
+      return { x: h.x, z: h.z };
+    }
+    return null;
   }
 
   public focusedKernel(): BotKernel | null {
@@ -128,16 +161,31 @@ export class BotFleet {
     return this.onlineIds.size;
   }
 
+  public onlineBotIds(): string[] {
+    return [...this.onlineIds].sort();
+  }
+
+  public isOnline(botId: string): boolean {
+    return this.onlineIds.has(botId);
+  }
+
   public focusedSnapshot(): FocusedStatusSnapshot | null {
     const k = this.focusedKernel();
     if (k === null) return null;
     const id = k.botId;
+    const e = k.bot.entity;
+    const vitalsKnown = e !== undefined;
     return {
       botId: id,
       phase: this.phaseById.get(id) ?? 'connecting',
       modeLabel: k.controller.modeLabel(),
       positionLabel: this.formatPosition(k.bot),
       lastError: this.lastErrorById.get(id) ?? null,
+      online: this.onlineIds.has(id),
+      health: vitalsKnown ? k.bot.health : null,
+      food: vitalsKnown ? k.bot.food : null,
+      telemetryLine: this.formatTelemetryLine(k),
+      taskLine: this.formatTaskLine(k),
     };
   }
 
@@ -147,6 +195,7 @@ export class BotFleet {
     for (const id of ids) {
       const k = this.kernels.get(id);
       const online = this.onlineIds.has(id);
+      const xz = k === undefined ? null : this.mapXZ(k.bot);
       out.push({
         botId: id,
         phase: this.phaseById.get(id) ?? 'disconnected',
@@ -154,15 +203,11 @@ export class BotFleet {
         online,
         lastError: this.lastErrorById.get(id) ?? null,
         positionLabel: k === undefined ? null : this.formatPosition(k.bot),
+        mapX: xz === null ? null : xz.x,
+        mapZ: xz === null ? null : xz.z,
       });
     }
     return out;
-  }
-
-  private firstOnlineId(): string | null {
-    const it = this.onlineIds.values().next();
-    if (it.done === true) return null;
-    return it.value;
   }
 
   private formatPosition(bot: BotKernel['bot']): string | null {
@@ -170,5 +215,44 @@ export class BotFleet {
     if (e === undefined) return null;
     const { x, y, z } = e.position;
     return `(${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`;
+  }
+
+  private mapXZ(bot: BotKernel['bot']): { x: number; z: number } | null {
+    const e = bot.entity;
+    if (e === undefined) return null;
+    const { x, z } = e.position;
+    return { x, z };
+  }
+
+  private formatTaskLine(k: BotKernel): string | null {
+    const mode = k.controller.modeLabel();
+    if (mode === 'GuidedMode') {
+      const nav = k.guidedMode.navigationTargetLabel();
+      if (nav === null) return null;
+      return `nav ${nav}`;
+    }
+    if (mode === 'AutoMode') {
+      const r = k.runtime;
+      return `mine y≤${r.targetY} strip ${r.miningDir.x},${r.miningDir.y},${r.miningDir.z}`;
+    }
+    return null;
+  }
+
+  private formatTelemetryLine(k: BotKernel): string {
+    k.metrics.ingestSampleForWindow();
+    const c = k.metrics.summary().counters;
+    const w = k.metrics.windowCounterDelta(
+      ['blocks.dug', 'distance_walked', 'deaths', 'mode.switch'],
+      60_000,
+    );
+    const dug = Math.round(c['blocks.dug'] ?? 0);
+    const dist = Math.round(c['distance_walked'] ?? 0);
+    const deaths = Math.round(c['deaths'] ?? 0);
+    const modeSw = Math.round(c['mode.switch'] ?? 0);
+    const wd = Math.round(w['blocks.dug'] ?? 0);
+    const wdist = Math.round(w['distance_walked'] ?? 0);
+    const wdeaths = Math.round(w['deaths'] ?? 0);
+    const wmode = Math.round(w['mode.switch'] ?? 0);
+    return `dug:${dug}(+${wd}/1m) dist:${dist}(+${wdist}/1m) deaths:${deaths}(+${wdeaths}/1m) modeΔ:${modeSw}(+${wmode}/1m)`;
   }
 }

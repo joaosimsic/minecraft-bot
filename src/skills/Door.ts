@@ -3,7 +3,7 @@ import type { Block } from 'prismarine-block';
 import { Vec3 } from 'vec3';
 import { Logger } from '../shared/Logger';
 import { wrap } from '../shared/result';
-import { metrics } from '../shared/Metrics';
+import type { Metrics } from '../shared/Metrics';
 
 interface BlockWithProps extends Block {
   properties?: Record<string, string | boolean>;
@@ -26,7 +26,11 @@ export class Door {
   private lastScanHadDoor: boolean = false;
   private lastScanTs: number = 0;
 
-  public constructor(bot: Bot, botId: string) {
+  public constructor(
+    bot: Bot,
+    botId: string,
+    private readonly metrics: Metrics,
+  ) {
     this.log = new Logger('Door', botId);
     this.bot = bot;
   }
@@ -110,7 +114,7 @@ export class Door {
 
     await new Promise<void>((r) => setTimeout(r, 250));
 
-    metrics.inc('door.open');
+    this.metrics.inc('door.open');
     this.log.info('opened at', `(${pos.x}, ${pos.y}, ${pos.z})`);
     this.log.decision('door_open', 'in_front_and_closed', {
       x: pos.x,
@@ -141,7 +145,7 @@ export class Door {
       !this.lastScanHadDoor &&
       now - this.lastScanTs < 1000
     ) {
-      metrics.inc('door.scan.cache_hit');
+      this.metrics.inc('door.scan.cache_hit');
       return;
     }
 
@@ -244,7 +248,7 @@ export class Door {
 
     if (candidates.length === 0) return 0;
 
-    metrics.inc('door.preopen.scan');
+    this.metrics.inc('door.preopen.scan');
     this.log.event('door_preopen', {
       target: { x: target.x, y: target.y, z: target.z },
       count: candidates.length,
@@ -280,7 +284,7 @@ export class Door {
     props: Record<string, string | boolean>,
     inFront: { ok: boolean; dist: number; dot: number },
   ): void {
-    metrics.inc(`door.skip.${reason}`);
+    this.metrics.inc(`door.skip.${reason}`);
     this.log.event('door_skip', {
       reason,
       x: pos.x,
@@ -336,7 +340,7 @@ export class Door {
         const [clErr] = await wrap(this.bot.activateBlock(block));
         if (clErr) this.log.error('close fail', clErr.message);
         if (!clErr) {
-          metrics.inc('door.close');
+          this.metrics.inc('door.close');
           this.log.info('closed at', `(${pos.x}, ${pos.y}, ${pos.z})`);
           this.log.event('door_close', { x: pos.x, y: pos.y, z: pos.z });
           const closeKey = `${pos.x},${pos.y},${pos.z}`;

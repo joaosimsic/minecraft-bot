@@ -1,22 +1,34 @@
 import mineflayer from 'mineflayer';
 import { config } from './config';
 import { ViaProxy } from './infra/ViaProxy';
-import { Logger, setLoggerUiSink } from './shared/Logger';
+import { Logger, LogUiOutlet, installLogUiOutlet } from './shared/Logger';
 import { sink } from './shared/Sink';
 import { BotKernel } from './core/BotKernel';
 import type { AsyncResult } from './shared/result';
 import { wrap, okVoid } from './shared/result';
 import { BotFleet } from './core/BotFleet';
+import { UiEventBus } from './ui/UiEventBus';
 import { UIManager } from './UIManager';
 import { InputHandler } from './core/InputHandler';
+import { MacroStore } from './core/MacroStore';
+import { ReplayFleetBridge } from './replay/ReplayFleetBridge';
+import { ReplayState } from './replay/ReplayState';
+import { pumpReplayFile } from './replay/pumpReplayFile';
+import { parseWebArgv } from './web/webArgv';
+import { WebCompanion } from './web/WebCompanion';
 
 const log = new Logger('main');
 
 class BotRunner {
   private proxy: ViaProxy | null = null;
   private readonly fleet = new BotFleet();
+  private readonly macros = new MacroStore();
   private ui: UIManager | null = null;
   private shuttingDown = false;
+  private readonly logOutlet = new LogUiOutlet();
+  private webCompanion: WebCompanion | null = null;
+
+  private readonly uiBus = new UiEventBus();
 
   private shouldUseProxy(): boolean {
     const { DISABLE_PROXY, FORCE_PROXY, VERSION } = config.env;
@@ -54,9 +66,12 @@ class BotRunner {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
 
-    this.fleet.stopStatusTicker();
     this.fleet.haltAll();
-    setLoggerUiSink(null);
+    this.logOutlet.detach();
+    if (this.webCompanion !== null) {
+      this.webCompanion.stop();
+      this.webCompanion = null;
+    }
     if (this.ui !== null) {
       this.ui.destroy();
       this.ui = null;
@@ -66,16 +81,123 @@ class BotRunner {
     process.exit(0);
   }
 
+  private wantsWebCompanion(): boolean {
+    if (parseWebArgv(process.argv.slice(2)).enable) return true;
+    return config.env.WEB_COMPANION === '1';
+  }
+
+  private webCompanionPort(): number {
+    const p = parseWebArgv(process.argv.slice(2)).port;
+    return p ?? config.env.WEB_PORT;
+  }
+
+  private attachWebCompanion(): void {
+    if (!this.wantsWebCompanion()) return;
+    const bind = config.env.WEB_BIND;
+    const port = this.webCompanionPort();
+    const companion = new WebCompanion();
+    const [err] = companion.start(bind, port, this.uiBus);
+    if (err !== null) {
+      log.error('web companion failed', err.message);
+      companion.stop();
+      return;
+    }
+    this.webCompanion = companion;
+    log.info('web companion', `http://${bind}:${port}/`);
+  }
+
+  private homeXZFromConfig(): { x: number; z: number } | null {
+    const h = config.env.home;
+    if (h === null) return null;
+    return { x: h.x, z: h.z };
+  }
+
+  private async runReplay(path: string): AsyncResult<null> {
+    const state = new ReplayState();
+    const pulse = (): void => {
+      this.uiBus.emitStatus(state.toPayload(this.homeXZFromConfig()));
+    };
+
+    const rfleet = new ReplayFleetBridge(state, pulse);
+
+    this.ui = new UIManager(
+      (): void => this.shutdown(),
+      (): string[] => state.allIds(),
+      (): string[] => this.macros.names(),
+      this.uiBus,
+    );
+
+    installLogUiOutlet(this.logOutlet);
+    this.logOutlet.attach((line): void => {
+      this.uiBus.emitLog(line);
+    });
+
+    this.attachWebCompanion();
+
+    const toUi = (msg: string): void => {
+      this.uiBus.emitLog({
+        botId: null,
+        level: 'info',
+        text: msg,
+        ts: new Date().toISOString(),
+      });
+    };
+
+    const input = new InputHandler(
+      rfleet,
+      toUi,
+      (): void => this.shutdown(),
+      this.ui,
+      this.macros,
+    );
+    this.ui.onFleetFocus((id): void => {
+      rfleet.setFocus(id);
+    });
+    this.ui.onSubmit((line): void => input.handleLine(line));
+    this.ui.render();
+
+    toUi(`replay file: ${path}`);
+
+    const [pe, count] = await pumpReplayFile(
+      path,
+      this.uiBus,
+      state,
+      pulse,
+      (m): void => toUi(m),
+    );
+    if (pe !== null) {
+      toUi(`replay error: ${pe.message}`);
+      log.error('replay', pe.message);
+      return [pe, null];
+    }
+
+    pulse();
+    toUi(`replay loaded ${count ?? 0} event(s) — read-only`);
+    return okVoid();
+  }
+
   public async run(): AsyncResult<null> {
+    const replayPath = config.env.REPLAY_JSONL;
+    if (replayPath !== undefined) return this.runReplay(replayPath);
+
     if (this.shouldUseProxy()) {
       const [e] = await this.startProxy();
       if (e) return [e, null];
     }
 
-    this.ui = new UIManager(() => this.shutdown());
-    setLoggerUiSink((line): void => {
-      this.ui?.appendLogLine(line);
+    this.ui = new UIManager(
+      () => this.shutdown(),
+      (): string[] => this.fleet.allRegisteredIds(),
+      (): string[] => this.macros.names(),
+      this.uiBus,
+    );
+
+    installLogUiOutlet(this.logOutlet);
+    this.logOutlet.attach((line): void => {
+      this.uiBus.emitLog(line);
     });
+
+    this.attachWebCompanion();
 
     const [sinkErr] = await sink.open(config.env.LOG_DIR);
     if (sinkErr) log.error('sink open failed', sinkErr.message);
@@ -85,15 +207,16 @@ class BotRunner {
     }
 
     this.fleet.setStatusRefresh((): void => {
-      this.ui?.updateStatus(
-        this.fleet.focusedSnapshot(),
-        this.fleet.fleetSnapshots(),
-      );
+      this.uiBus.emitStatus({
+        focused: this.fleet.focusedSnapshot(),
+        fleet: this.fleet.fleetSnapshots(),
+        focusedId: this.fleet.focusedId(),
+        homeXZ: this.fleet.homeXZ(),
+      });
     });
-    this.fleet.startStatusTicker();
 
     const toUi = (msg: string): void => {
-      this.ui?.appendLogLine({
+      this.uiBus.emitLog({
         botId: null,
         level: 'info',
         text: msg,
@@ -101,7 +224,16 @@ class BotRunner {
       });
     };
 
-    const input = new InputHandler(this.fleet, toUi, () => this.shutdown());
+    const input = new InputHandler(
+      this.fleet,
+      toUi,
+      () => this.shutdown(),
+      this.ui,
+      this.macros,
+    );
+    this.ui.onFleetFocus((id): void => {
+      this.fleet.setFocus(id);
+    });
     this.ui.onSubmit((line): void => input.handleLine(line));
     this.ui.render();
 

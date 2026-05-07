@@ -1,7 +1,7 @@
 import { Vec3 } from 'vec3';
 import { Utils } from '../shared/Utils';
 import { Logger } from '../shared/Logger';
-import { metrics } from '../shared/Metrics';
+import type { Metrics } from '../shared/Metrics';
 import type { BotMode } from './BotMode';
 import type { Navigator } from '../skills/Navigator';
 
@@ -14,6 +14,7 @@ export class GuidedMode implements BotMode {
     private readonly navigator: Navigator,
     private readonly defaultGoal: Vec3 | null,
     botId: string,
+    private readonly metrics: Metrics,
   ) {
     this.log = new Logger('GuidedMode', botId);
   }
@@ -21,7 +22,7 @@ export class GuidedMode implements BotMode {
   public setTarget(target: Vec3): void {
     this.target = target;
     this.atGoal = false;
-    metrics.inc('target.set');
+    this.metrics.inc('target.set');
     this.log.decision('target_set', 'user_command', {
       x: target.x,
       y: target.y,
@@ -32,6 +33,17 @@ export class GuidedMode implements BotMode {
 
   public onRespawn(): void {
     this.atGoal = false;
+  }
+
+  public navigationTargetLabel(): string | null {
+    if (this.target !== null) {
+      const t = this.target;
+      return `(${Math.floor(t.x)}, ${Math.floor(t.y)}, ${Math.floor(t.z)})`;
+    }
+    const d = this.defaultGoal;
+    if (d === null) return null;
+    if (this.atGoal) return null;
+    return `goal (${Math.floor(d.x)}, ${Math.floor(d.y)}, ${Math.floor(d.z)})`;
   }
 
   public async tick(): Promise<void> {
@@ -48,7 +60,7 @@ export class GuidedMode implements BotMode {
 
     const reached = await this.navigator.walkTo(t);
     if (!reached) {
-      metrics.inc('target.failed');
+      this.metrics.inc('target.failed');
       this.log.decision('target_failed', 'walk_returned_false', {
         x: t.x,
         y: t.y,
@@ -59,7 +71,7 @@ export class GuidedMode implements BotMode {
       return;
     }
 
-    metrics.inc('target.reached');
+    this.metrics.inc('target.reached');
     this.log.decision('target_reached', 'walk_succeeded', {
       x: t.x,
       y: t.y,

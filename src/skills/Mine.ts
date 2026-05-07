@@ -7,6 +7,7 @@ import { Combat } from './Combat';
 import { Lighting } from './Lighting';
 import { Door } from './Door';
 import { wrap } from '../shared/result';
+import type { Metrics } from '../shared/Metrics';
 import type { Navigator } from './Navigator';
 import { LAVA_NAMES, FILLER_BLOCKS } from '../shared/constants';
 
@@ -26,15 +27,22 @@ export class Mine {
   private readonly combat: Combat;
   private readonly lighting: Lighting;
   private readonly door: Door;
+  private readonly metrics: Metrics;
 
-  public constructor(bot: Bot, navigator: Navigator, botId: string) {
+  public constructor(
+    bot: Bot,
+    navigator: Navigator,
+    botId: string,
+    metrics: Metrics,
+  ) {
     this.bot = bot;
     this.navigator = navigator;
+    this.metrics = metrics;
     this.log = new Logger('Mine', botId);
     this.lava = new Lava(bot, botId);
     this.combat = new Combat(bot, botId);
     this.lighting = new Lighting(bot, botId);
-    this.door = new Door(bot, botId);
+    this.door = new Door(bot, botId, metrics);
   }
 
   public async descendTo(targetY: number): Promise<void> {
@@ -116,7 +124,11 @@ export class Mine {
     if (!this.bot.canDigBlock(b)) return;
 
     const [digErr] = await wrap(this.bot.dig(b));
-    if (digErr) this.log.warn('dig fail', b.name, digErr.message);
+    if (digErr) {
+      this.log.warn('dig fail', b.name, digErr.message);
+      return;
+    }
+    this.metrics.inc('blocks.dug');
   }
 
   private async moveTo(pos: Vec3): Promise<boolean> {

@@ -19,7 +19,7 @@ const UNBREAKABLE = new Set([
 const AIR_OR_LAVA = new Set(['air', 'lava', 'flowing_lava', 'still_lava']);
 
 export class Mine {
-  private readonly log = new Logger('Mine');
+  private readonly log: Logger;
   private readonly bot: Bot;
   private readonly navigator: Navigator;
   private readonly lava: Lava;
@@ -27,13 +27,14 @@ export class Mine {
   private readonly lighting: Lighting;
   private readonly door: Door;
 
-  public constructor(bot: Bot, navigator: Navigator) {
+  public constructor(bot: Bot, navigator: Navigator, botId: string) {
     this.bot = bot;
     this.navigator = navigator;
-    this.lava = new Lava(bot);
-    this.combat = new Combat(bot);
-    this.lighting = new Lighting(bot);
-    this.door = new Door(bot);
+    this.log = new Logger('Mine', botId);
+    this.lava = new Lava(bot, botId);
+    this.combat = new Combat(bot, botId);
+    this.lighting = new Lighting(bot, botId);
+    this.door = new Door(bot, botId);
   }
 
   public async descendTo(targetY: number): Promise<void> {
@@ -47,12 +48,18 @@ export class Mine {
 
     this.log.info('descendTo: navigating toward Y', targetY);
 
-    const pathPromise = this.navigator.walkTo(goal, 10).then((okWalk): boolean => {
-      if (!okWalk) return false;
-      return Math.floor(this.bot.entity.position.y) <= targetY + 2;
-    });
+    const pathPromise = this.navigator
+      .walkTo(goal, 10)
+      .then((okWalk): boolean => {
+        if (!okWalk) return false;
+        return Math.floor(this.bot.entity.position.y) <= targetY + 2;
+      });
 
-    const [wErr, reachedVal] = await Utils.withTimeout(pathPromise, 30000, 'descendTo');
+    const [wErr, reachedVal] = await Utils.withTimeout(
+      pathPromise,
+      30000,
+      'descendTo',
+    );
 
     if (wErr !== null)
       this.log.warn('navigation descend failed, digging down', wErr.message);
@@ -114,7 +121,11 @@ export class Mine {
 
   private async moveTo(pos: Vec3): Promise<boolean> {
     const pathPromise = this.navigator.walkTo(pos, 1);
-    const [wErr, ok] = await Utils.withTimeout(pathPromise, 8000, 'stripMine_moveTo');
+    const [wErr, ok] = await Utils.withTimeout(
+      pathPromise,
+      8000,
+      'stripMine_moveTo',
+    );
     if (wErr !== null) this.log.warn('moveTo failed', wErr.message);
     return wErr === null && ok === true;
   }
@@ -123,10 +134,7 @@ export class Mine {
     const floor = this.bot.blockAt(aheadDown);
     if (floor && !AIR_OR_LAVA.has(floor.name)) return;
 
-    const cobble = Utils.findItem(
-      this.bot,
-      (n) => FILLER_BLOCKS.has(n),
-    );
+    const cobble = Utils.findItem(this.bot, (n) => FILLER_BLOCKS.has(n));
     if (!cobble) return;
 
     const ref = this.bot.blockAt(aheadDown.offset(0, -1, 0));

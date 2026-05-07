@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const botSchema = {
   BOT_USER: z.string().min(1),
+  BOT_USERS: z.string().optional(),
   AUTH: z.enum(['offline', 'microsoft', 'mojang']),
 
   TARGET_Y: z.coerce.number().min(0),

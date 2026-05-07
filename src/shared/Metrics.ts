@@ -44,7 +44,8 @@ class Metrics {
   }
 
   public summary(): MetricsSnapshot {
-    const last = this.trail.length > 0 ? this.trail[this.trail.length - 1]! : null;
+    const last =
+      this.trail.length > 0 ? this.trail[this.trail.length - 1]! : null;
 
     return {
       uptimeMs: this.uptimeMs(),

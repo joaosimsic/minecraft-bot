@@ -11,6 +11,7 @@ import { BotWorld } from './world/BotWorld';
 import { Collision } from './world/Collision';
 import type { Vec3 } from 'vec3';
 import { config } from '../config';
+import { Logger } from '../shared/Logger';
 
 const REPLAN_BUDGET = 14;
 const TRANSIENT_REPLAN_BUDGET = 6;
@@ -30,7 +31,7 @@ export class NavigationController {
 
   public constructor(
     private readonly bot: Bot,
-    scope = 'navigation',
+    botId: string,
   ) {
     this.validator = new NavigationValidator({
       diagonal: config.env.NAV_DIAGONAL,
@@ -52,7 +53,7 @@ export class NavigationController {
       void this.edgeMemory.persistSyncQuiet();
     });
     this.world = new BotWorld(bot);
-    this.recorder = new NavigationRecorder(scope);
+    this.recorder = new NavigationRecorder(new Logger('navigation', botId));
     this.recovery = new Recovery(
       REPLAN_BUDGET,
       TRANSIENT_REPLAN_BUDGET,

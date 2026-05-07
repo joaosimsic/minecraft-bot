@@ -6,6 +6,7 @@ export interface SinkEvent {
   ts: string;
   type: string;
   scope?: string;
+  botId?: string;
   data?: Record<string, unknown>;
 }
 
@@ -26,8 +27,12 @@ class Sink {
     this.text = fs.createWriteStream(this.textPath, { flags: 'a' });
     this.jsonl = fs.createWriteStream(this.jsonlPath, { flags: 'a' });
 
-    this.text.on('error', (e: Error): void => console.error('[sink:text]', e.message));
-    this.jsonl.on('error', (e: Error): void => console.error('[sink:jsonl]', e.message));
+    this.text.on('error', (e: Error): void =>
+      console.error('[sink:text]', e.message),
+    );
+    this.jsonl.on('error', (e: Error): void =>
+      console.error('[sink:jsonl]', e.message),
+    );
 
     return okVoid();
   }

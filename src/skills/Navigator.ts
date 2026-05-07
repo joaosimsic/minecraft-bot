@@ -6,13 +6,18 @@ import { metrics } from '../shared/Metrics';
 import { NavigationController } from '../navigation/NavigationController';
 
 export class Navigator {
-  private readonly log = new Logger('Navigator');
+  private readonly log: Logger;
   private readonly bot: Bot;
   private readonly navigation: NavigationController;
 
-  public constructor(bot: Bot, navigation: NavigationController) {
+  public constructor(
+    bot: Bot,
+    navigation: NavigationController,
+    botId: string,
+  ) {
     this.bot = bot;
     this.navigation = navigation;
+    this.log = new Logger('Navigator', botId);
   }
 
   private static centerBlock(v: Vec3): Vec3 {
@@ -26,7 +31,11 @@ export class Navigator {
     metrics.inc('walk.start');
     this.log.event('walk_start', {
       target: { x: target.x, y: target.y, z: target.z },
-      from: { x: +start.x.toFixed(2), y: +start.y.toFixed(2), z: +start.z.toFixed(2) },
+      from: {
+        x: +start.x.toFixed(2),
+        y: +start.y.toFixed(2),
+        z: +start.z.toFixed(2),
+      },
       range,
     });
     this.log.decision('walk', 'request', {
@@ -45,7 +54,11 @@ export class Navigator {
     const [navErr, reached] = await wrap(this.navigation.walkTo(target, range));
     if (navErr) {
       this.log.warn('navigation stack error', navErr.message);
-      this.log.event('walk_end', { ok: false, mode: 'navigator_error', err: navErr.message });
+      this.log.event('walk_end', {
+        ok: false,
+        mode: 'navigator_error',
+        err: navErr.message,
+      });
       metrics.inc('walk.nav.error');
       return false;
     }

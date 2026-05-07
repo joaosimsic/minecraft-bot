@@ -7,9 +7,14 @@ import { wrap } from '../shared/result';
 const INVALID_SURFACE = new Set(['air', 'lava', 'water']);
 
 export class Lighting {
-  private readonly log = new Logger('Lighting');
+  private readonly log: Logger;
 
-  constructor(private readonly bot: Bot) {}
+  public constructor(
+    private readonly bot: Bot,
+    botId: string,
+  ) {
+    this.log = new Logger('Lighting', botId);
+  }
 
   public isDarkHere(): boolean {
     const b = this.bot.blockAt(this.bot.entity.position);

@@ -19,13 +19,17 @@ type SkipReason =
   | 'activate_failed';
 
 export class Door {
-  private readonly log = new Logger('Door');
+  private readonly log: Logger;
+  private readonly bot: Bot;
   private readonly recentlyToggled = new Set<string>();
   private lastScanBucket: string | null = null;
   private lastScanHadDoor: boolean = false;
   private lastScanTs: number = 0;
 
-  public constructor(private readonly bot: Bot) {}
+  public constructor(bot: Bot, botId: string) {
+    this.log = new Logger('Door', botId);
+    this.bot = bot;
+  }
 
   public isDoor(name: string): boolean {
     return /door/i.test(name);
@@ -81,7 +85,12 @@ export class Door {
     setTimeout(() => this.recentlyToggled.delete(key), 1500);
 
     this.log.event('door_activate', {
-      x: pos.x, y: pos.y, z: pos.z, name: blockName, props, ...inFront,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      name: blockName,
+      props,
+      ...inFront,
     });
 
     const [err] = await wrap(this.bot.activateBlock(block));
@@ -89,7 +98,11 @@ export class Door {
       this.log.error('open fail', err.message);
       this.log.event('door_skip', {
         reason: 'activate_failed' satisfies SkipReason,
-        x: pos.x, y: pos.y, z: pos.z, name: blockName, msg: err.message,
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        name: blockName,
+        msg: err.message,
       });
       this.recentlyToggled.delete(key);
       return false;
@@ -99,8 +112,18 @@ export class Door {
 
     metrics.inc('door.open');
     this.log.info('opened at', `(${pos.x}, ${pos.y}, ${pos.z})`);
-    this.log.decision('door_open', 'in_front_and_closed', { x: pos.x, y: pos.y, z: pos.z, name: blockName });
-    this.log.event('door_open', { x: pos.x, y: pos.y, z: pos.z, name: blockName });
+    this.log.decision('door_open', 'in_front_and_closed', {
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      name: blockName,
+    });
+    this.log.event('door_open', {
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      name: blockName,
+    });
     void this.closeDoorWhenClear(block, pos);
     return true;
   }
@@ -138,15 +161,20 @@ export class Door {
     const right = new Vec3(front.x - lx, front.y, front.z - lz);
 
     const targets: Vec3[] = [
-      front, front.offset(0, 1, 0),
-      left,  left.offset(0, 1, 0),
-      right, right.offset(0, 1, 0),
+      front,
+      front.offset(0, 1, 0),
+      left,
+      left.offset(0, 1, 0),
+      right,
+      right.offset(0, 1, 0),
     ];
 
     const scan = targets.map((t): Record<string, unknown> => {
       const b = this.bot.blockAt(t) as BlockWithProps | null;
       return {
-        x: t.x, y: t.y, z: t.z,
+        x: t.x,
+        y: t.y,
+        z: t.z,
         name: b?.name ?? null,
         props: b?.properties ?? null,
         isDoor: b ? this.isDoor(b.name) : false,
@@ -159,15 +187,24 @@ export class Door {
     this.lastScanTs = now;
 
     this.log.event('door_scan', {
-      botPos: { x: +this.bot.entity.position.x.toFixed(2), y: +this.bot.entity.position.y.toFixed(2), z: +this.bot.entity.position.z.toFixed(2) },
-      yaw: +yaw.toFixed(3), dx, dz,
+      botPos: {
+        x: +this.bot.entity.position.x.toFixed(2),
+        y: +this.bot.entity.position.y.toFixed(2),
+        z: +this.bot.entity.position.z.toFixed(2),
+      },
+      yaw: +yaw.toFixed(3),
+      dx,
+      dz,
       checks: scan,
     });
 
     await Promise.all(targets.map((t): Promise<boolean> => this.openDoorAt(t)));
   }
 
-  public async openDoorsTowardTarget(target: Vec3, maxBlocks = 8): Promise<number> {
+  public async openDoorsTowardTarget(
+    target: Vec3,
+    maxBlocks = 8,
+  ): Promise<number> {
     const start = this.bot.entity.position;
     const dx = target.x - start.x;
     const dz = target.z - start.z;
@@ -188,10 +225,7 @@ export class Door {
       const pz = Math.floor(start.z + stepZ * i);
       const py = Math.floor(start.y);
 
-      const checks = [
-        new Vec3(px, py, pz),
-        new Vec3(px, py + 1, pz),
-      ];
+      const checks = [new Vec3(px, py, pz), new Vec3(px, py + 1, pz)];
 
       const j = checks.length;
       let k = 0;
@@ -211,7 +245,10 @@ export class Door {
     if (candidates.length === 0) return 0;
 
     metrics.inc('door.preopen.scan');
-    this.log.event('door_preopen', { target: { x: target.x, y: target.y, z: target.z }, count: candidates.length });
+    this.log.event('door_preopen', {
+      target: { x: target.x, y: target.y, z: target.z },
+      count: candidates.length,
+    });
 
     return this.lookThenOpen(candidates);
   }
@@ -223,7 +260,9 @@ export class Door {
     while (i < n) {
       const c = candidates[i]!;
       const [lookErr] = await wrap(
-        this.bot.lookAt(new Vec3(c.x + 0.5, this.bot.entity.position.y + 1.6, c.z + 0.5)),
+        this.bot.lookAt(
+          new Vec3(c.x + 0.5, this.bot.entity.position.y + 1.6, c.z + 0.5),
+        ),
       );
       if (lookErr) this.log.warn('preopen lookAt failed', lookErr.message);
 
@@ -243,12 +282,22 @@ export class Door {
   ): void {
     metrics.inc(`door.skip.${reason}`);
     this.log.event('door_skip', {
-      reason, x: pos.x, y: pos.y, z: pos.z,
-      name, props, dist: inFront.dist, dot: inFront.dot,
+      reason,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      name,
+      props,
+      dist: inFront.dist,
+      dot: inFront.dot,
     });
   }
 
-  private isDirectlyInFrontDetailed(doorPos: Vec3): { ok: boolean; dist: number; dot: number } {
+  private isDirectlyInFrontDetailed(doorPos: Vec3): {
+    ok: boolean;
+    dist: number;
+    dot: number;
+  } {
     const botPos = this.bot.entity.position;
     const yaw = this.bot.entity.yaw;
 
@@ -301,6 +350,11 @@ export class Door {
       await new Promise<void>((r) => setTimeout(r, 200));
     }
 
-    this.log.event('door_close_timeout', { x: pos.x, y: pos.y, z: pos.z, hasSteppedInside });
+    this.log.event('door_close_timeout', {
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      hasSteppedInside,
+    });
   }
 }

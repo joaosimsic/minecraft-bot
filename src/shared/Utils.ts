@@ -15,7 +15,10 @@ export class Utils {
     return bot.inventory.items().find((i) => predicate(i.name));
   }
 
-  public static countItem(bot: Bot, predicate: (name: string) => boolean): number {
+  public static countItem(
+    bot: Bot,
+    predicate: (name: string) => boolean,
+  ): number {
     return bot.inventory
       .items()
       .filter((i) => predicate(i.name))

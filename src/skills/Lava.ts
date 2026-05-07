@@ -25,9 +25,14 @@ const FACES: readonly Vec3[] = [
 ];
 
 export class Lava {
-  private readonly log = new Logger('Lava');
+  private readonly log: Logger;
 
-  constructor(private readonly bot: Bot) {}
+  public constructor(
+    private readonly bot: Bot,
+    botId: string,
+  ) {
+    this.log = new Logger('Lava', botId);
+  }
 
   public async sealNearby(radius = 4): Promise<boolean> {
     const lava = this.bot.findBlock({
@@ -37,11 +42,7 @@ export class Lava {
 
     if (!lava) return false;
 
-    const filler = Utils.findItem(
-      this.bot,
-      (n) =>
-        FILLER_BLOCKS.has(n),
-    );
+    const filler = Utils.findItem(this.bot, (n) => FILLER_BLOCKS.has(n));
 
     if (!filler) {
       this.log.warn('no filler block');

@@ -19,9 +19,14 @@ const HOSTILE = new Set([
 ]);
 
 export class Combat {
-  private readonly log = new Logger('Combat');
+  private readonly log: Logger;
 
-  constructor(private readonly bot: Bot) {}
+  public constructor(
+    private readonly bot: Bot,
+    botId: string,
+  ) {
+    this.log = new Logger('Combat', botId);
+  }
 
   public isHostile(e: Entity): boolean {
     if (!e || e.type !== 'mob') return false;

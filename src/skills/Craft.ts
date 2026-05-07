@@ -11,17 +11,20 @@ const PLANK_NAMES = new Set(['planks', 'wood', 'oak_planks']);
 const LOG_NAMES = new Set(['log', 'wood']);
 
 export class Craft {
-  private readonly log = new Logger('Craft');
+  private readonly log: Logger;
   private readonly mc: ReturnType<typeof mcData>;
 
-  constructor(private readonly bot: Bot) {
+  public constructor(
+    private readonly bot: Bot,
+    botId: string,
+  ) {
+    this.log = new Logger('Craft', botId);
     this.mc = mcData(bot.version);
   }
 
   public findCraftingTable(range = 16): Block | null {
     return this.bot.findBlock({
-      matching: (b) =>
-        b !== null && CRAFTING_BLOCKS.has(b.name),
+      matching: (b) => b !== null && CRAFTING_BLOCKS.has(b.name),
       maxDistance: range,
     });
   }
@@ -61,10 +64,7 @@ export class Craft {
   }
 
   public async ensurePlanks(want: number): Promise<boolean> {
-    const have = Utils.countItem(
-      this.bot,
-      (n) => PLANK_NAMES.has(n),
-    );
+    const have = Utils.countItem(this.bot, (n) => PLANK_NAMES.has(n));
     if (have >= want) return true;
 
     const logItem = Utils.findItem(
@@ -92,19 +92,13 @@ export class Craft {
     const table = this.findCraftingTable(8);
     if (table) return table;
 
-    const existing = Utils.findItem(
-      this.bot,
-      (n) => CRAFTING_BLOCKS.has(n),
-    );
+    const existing = Utils.findItem(this.bot, (n) => CRAFTING_BLOCKS.has(n));
     if (!existing) {
       await this.ensurePlanks(4);
       await this.doCraft('crafting_table', 1, null);
     }
 
-    const have = Utils.findItem(
-      this.bot,
-      (n) => CRAFTING_BLOCKS.has(n),
-    );
+    const have = Utils.findItem(this.bot, (n) => CRAFTING_BLOCKS.has(n));
     if (!have) return null;
 
     const ref = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0));

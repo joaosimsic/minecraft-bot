@@ -1,4 +1,5 @@
 import type { Bot } from 'mineflayer';
+import { Logger } from '../../src/shared/Logger';
 import { NavigationRecorder } from '../../src/navigation/telemetry/Recorder';
 import type { WorldCell } from '../../src/navigation/world/World';
 
@@ -27,6 +28,9 @@ export class CaptureRecorder extends NavigationRecorder {
     data?: Record<string, unknown>;
   }> = [];
 
+  public constructor(scope = 'capture') {
+    super(new Logger('navigation', scope));
+  }
   public override emit(type: string, data?: Record<string, unknown>): void {
     this.frames.push({ type, data });
     super.emit(type, data);

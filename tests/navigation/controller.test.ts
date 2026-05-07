@@ -29,7 +29,7 @@ describe('NavigationController probe lifecycle', () => {
     bot.entities = {};
     bot.setControlState = (): void => {};
 
-    new NavigationController(bot);
+    new NavigationController(bot, 'test');
 
     const ee = bot as unknown as EventEmitter;
 

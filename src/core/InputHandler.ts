@@ -1,43 +1,85 @@
-import * as readline from 'node:readline';
 import { Vec3 } from 'vec3';
-import type { Bot } from 'mineflayer';
 import { Logger } from '../shared/Logger';
 import type { ModeController } from './ModeController';
 import type { AutoMode } from '../modes/AutoMode';
 import type { GuidedMode } from '../modes/GuidedMode';
+import type { BotFleet } from './BotFleet';
+import type { BotKernel } from './BotKernel';
 
 export class InputHandler {
-  private readonly log = new Logger('InputHandler');
-  private readonly rl: readline.Interface;
+  private readonly log: Logger;
 
   public constructor(
-    private readonly bot: Bot,
-    private readonly controller: ModeController,
-    private readonly autoMode: AutoMode,
-    private readonly guidedMode: GuidedMode,
+    private readonly fleet: BotFleet,
+    private readonly uiLog: (line: string) => void,
+    private readonly onExit: () => void,
   ) {
-    this.rl = readline.createInterface({ input: process.stdin, terminal: false });
-    this.rl.on('line', (line: string): void => {
-      this.handleLine(line.trim());
-    });
+    this.log = new Logger('InputHandler');
   }
 
-  private handleLine(line: string): void {
-    const parts = line.split(/\s+/);
-    const head = parts[0] ?? '';
+  public handleLine(rawLine: string): void {
+    const line = rawLine.trim();
+    if (line.length === 0) return;
+
     this.log.event('command', { line });
 
+    if (line === 'bots') {
+      this.logBots();
+      return;
+    }
+
+    if (line === 'exit') {
+      this.fleet.haltAll();
+      this.onExit();
+      return;
+    }
+
+    const focusParts = line.split(/\s+/);
+    const fh = focusParts[0] ?? '';
+    if ((fh === 'focus' || fh === 'use') && !line.startsWith('@')) {
+      const id = focusParts[1];
+      if (id === undefined) {
+        this.uiLog('usage: focus <id>');
+        return;
+      }
+      const ok = this.fleet.setFocus(id);
+      if (!ok) this.uiLog(`cannot focus ${id}`);
+      return;
+    }
+
+    const { target, rest } = this.parseTarget(line);
+    if (target === null) {
+      this.uiLog('no bot resolved for command');
+      return;
+    }
+
+    const trimmed = rest.trim();
+    if (trimmed.length === 0) return;
+
+    if (trimmed === 'exit') {
+      this.fleet.haltAll();
+      this.onExit();
+      return;
+    }
+
+    const kernel = target;
+    const bot = kernel.bot;
+    const controller = kernel.controller;
+    const autoMode = kernel.autoMode;
+    const guidedMode = kernel.guidedMode;
+
+    const parts = trimmed.split(/\s+/);
+    const head = parts[0] ?? '';
+
     const commands: Record<string, () => void> = {
-      auto:   () => this.controller.switchTo(this.autoMode),
-      guided: () => this.controller.switchTo(this.guidedMode),
-      stop:   () => this.controller.stop(),
-      ping:   () => {
-        const { x, y, z } = this.bot.entity.position;
-        this.log.info('pos ->', `(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`);
-      },
-      exit:   () => {
-        this.controller.halt();
-        this.rl.close();
+      auto: () => controller.switchTo(autoMode),
+      guided: () => controller.switchTo(guidedMode),
+      stop: () => controller.stop(),
+      ping: () => {
+        const { x, y, z } = bot.entity.position;
+        this.uiLog(
+          `[${kernel.botId}] pos (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`,
+        );
       },
     };
 
@@ -49,13 +91,44 @@ export class InputHandler {
 
     const coords = this.parseCoords(parts);
     if (coords !== null) {
-      this.guidedMode.setTarget(coords);
-      this.controller.switchTo(this.guidedMode);
-      this.log.info('target ->', `(${coords.x}, ${coords.y}, ${coords.z})`);
+      guidedMode.setTarget(coords);
+      controller.switchTo(guidedMode);
+      this.uiLog(
+        `[${kernel.botId}] target (${coords.x}, ${coords.y}, ${coords.z})`,
+      );
       return;
     }
 
-    this.log.warn('unknown command. try: auto | guided | stop | ping | exit | <x> <y> <z>');
+    this.uiLog(
+      'unknown command. try: bots | focus <id> | @<id> … | auto | guided | stop | ping | exit | <x> <y> <z>',
+    );
+  }
+
+  private logBots(): void {
+    const rows = this.fleet.fleetSnapshots();
+    const text = rows
+      .map((r) => `${r.botId} online=${r.online} phase=${r.phase}`)
+      .join('\n');
+    this.uiLog(text.length === 0 ? '(no bots)' : text);
+  }
+
+  private parseTarget(line: string): {
+    target: BotKernel | null;
+    rest: string;
+  } {
+    if (line.startsWith('@')) {
+      const space = line.indexOf(' ');
+      if (space === -1) {
+        const id = line.slice(1);
+        const k = this.fleet.resolveKernel(id);
+        return { target: k, rest: '' };
+      }
+      const id = line.slice(1, space);
+      const k = this.fleet.resolveKernel(id);
+      return { target: k, rest: line.slice(space + 1) };
+    }
+
+    return { target: this.fleet.focusedKernel(), rest: line };
   }
 
   private parseCoords(parts: string[]): Vec3 | null {
@@ -72,9 +145,5 @@ export class InputHandler {
     if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) return null;
 
     return new Vec3(x, y, z);
-  }
-
-  public close(): void {
-    this.rl.close();
   }
 }

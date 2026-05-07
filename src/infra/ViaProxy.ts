@@ -10,10 +10,47 @@ const JAR_VER = config.env.VIAPROXY_VERSION;
 const JAR_NAME = `ViaProxy-${JAR_VER}.jar`;
 const PROXY_DIR = join(process.cwd(), '.viaproxy');
 const JAR_PATH = join(PROXY_DIR, JAR_NAME);
+const ANSI_ESCAPE = /\x1b\[[0-9;]*[A-Za-z]/g;
+
+const stripAnsi = (s: string): string => s.replace(ANSI_ESCAPE, '');
 
 export class ViaProxy {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private readonly log = new Logger('viaproxy');
+
+  private static pumpStream(
+    stream: ReadableStream<Uint8Array> | undefined,
+    log: Logger,
+  ): void {
+    if (stream === undefined) return;
+
+    void (async (): Promise<void> => {
+      const reader = stream.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) break;
+        buf += dec.decode(r.value, { stream: true });
+        const parts = buf.split('\n');
+        buf = parts.pop() ?? '';
+
+        for (const raw of parts) {
+          const line = stripAnsi(raw.replace(/\r$/, '')).trimEnd();
+          if (line.length === 0) continue;
+          log.info(line);
+        }
+      }
+
+      if (buf.length === 0) return;
+
+      const line = stripAnsi(buf.replace(/\r$/, '')).trimEnd();
+      if (line.length === 0) return;
+
+      log.info(line);
+    })().catch((): void => undefined);
+  }
 
   constructor(
     private readonly opts: {
@@ -123,9 +160,12 @@ export class ViaProxy {
 
     this.proc = Bun.spawn(['java', '-jar', JAR_PATH, 'cli', ...args], {
       cwd: PROXY_DIR,
-      stdout: 'inherit',
-      stderr: 'inherit',
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
+
+    ViaProxy.pumpStream(this.proc.stdout, this.log);
+    ViaProxy.pumpStream(this.proc.stderr, this.log);
 
     void this.proc.exited.then(() => {
       this.log.info('exited code', this.proc?.exitCode);

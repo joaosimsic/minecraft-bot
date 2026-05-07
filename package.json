@@ -8,12 +8,14 @@
     "test": "bun --env-file=.env.example test"
   },
   "devDependencies": {
+    "@types/blessed": "^0.1.27",
     "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
+    "blessed": "^0.1.81",
     "minecraft-data": "^3.109.1",
     "mineflayer": "^4.37.1",
     "prismarine-entity": "^2.6.0",

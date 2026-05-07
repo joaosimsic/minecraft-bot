@@ -24,9 +24,14 @@ const KEEP_LIMITS: Record<string, number> = {
 };
 
 export class Chest {
-  private readonly log = new Logger('Chest');
+  private readonly log: Logger;
 
-  public constructor(private readonly bot: Bot) {}
+  public constructor(
+    private readonly bot: Bot,
+    botId: string,
+  ) {
+    this.log = new Logger('Chest', botId);
+  }
 
   public findChest(range = 24): Block | null {
     return this.bot.findBlock({
@@ -74,8 +79,7 @@ export class Chest {
       if (give <= 0) continue;
 
       const [depErr] = await wrap(win.deposit(it.type, it.metadata, give));
-      if (depErr)
-        this.log.warn('deposit fail', it.name, depErr.message);
+      if (depErr) this.log.warn('deposit fail', it.name, depErr.message);
       if (!depErr) this.log.info('deposit', give, it.name);
     }
 
@@ -95,9 +99,7 @@ export class Chest {
       if (!slot) continue;
 
       const take = Math.min(slot.count, w.count);
-      const [wErr] = await wrap(
-        win.withdraw(slot.type, slot.metadata, take),
-      );
+      const [wErr] = await wrap(win.withdraw(slot.type, slot.metadata, take));
       if (wErr) this.log.warn('withdraw fail', w.name, wErr.message);
       if (!wErr) this.log.info('withdrew', take, w.name);
     }
@@ -108,8 +110,7 @@ export class Chest {
   public async depositRoutine(): Promise<boolean> {
     const { x, y, z } = this.bot.entity.position;
     const chest =
-      this.findChest(32) ??
-      (await this.placeChestNear(new Vec3(x, y, z)));
+      this.findChest(32) ?? (await this.placeChestNear(new Vec3(x, y, z)));
     if (!chest) return false;
 
     await this.depositAll(chest);

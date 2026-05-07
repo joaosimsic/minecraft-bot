@@ -13,7 +13,7 @@ interface BotEntityExtras {
 }
 
 export class Telemetry {
-  private readonly log = new Logger('Telemetry');
+  private readonly log: Logger;
   private timer: NodeJS.Timeout | null = null;
   private summaryTimer: NodeJS.Timeout | null = null;
   private lastSig = '';
@@ -27,12 +27,18 @@ export class Telemetry {
     private readonly sampleMs: number,
     private readonly summaryMs: number,
     private readonly trailMinBlocks: number,
-  ) {}
+    botId: string,
+  ) {
+    this.log = new Logger('Telemetry', botId);
+  }
 
   public start(): void {
     this.bind();
     this.timer = setInterval((): void => this.snapshot('tick'), this.sampleMs);
-    this.summaryTimer = setInterval((): void => this.dumpSummary(), this.summaryMs);
+    this.summaryTimer = setInterval(
+      (): void => this.dumpSummary(),
+      this.summaryMs,
+    );
   }
 
   private bind(): void {
@@ -43,7 +49,11 @@ export class Telemetry {
       if (!e) return;
       this.lastTrailPos = e.position.clone();
       this.lastMovePos = e.position.clone();
-      metrics.pushPos(+e.position.x.toFixed(2), +e.position.y.toFixed(2), +e.position.z.toFixed(2));
+      metrics.pushPos(
+        +e.position.x.toFixed(2),
+        +e.position.y.toFixed(2),
+        +e.position.z.toFixed(2),
+      );
     });
 
     this.bot.on('death', (): void => {
@@ -119,7 +129,7 @@ export class Telemetry {
   }
 
   private checkCollisions(): void {
-    const e = this.bot.entity as (typeof this.bot.entity) & BotEntityExtras;
+    const e = this.bot.entity as typeof this.bot.entity & BotEntityExtras;
     const collH = e.isCollidedHorizontally === true;
     const collV = e.isCollidedVertically === true;
 
@@ -157,7 +167,12 @@ export class Telemetry {
       axis,
       pos: { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2) },
       yaw: +yaw.toFixed(3),
-      front: { name: front?.name ?? null, x: frontPos.x, y: frontPos.y, z: frontPos.z },
+      front: {
+        name: front?.name ?? null,
+        x: frontPos.x,
+        y: frontPos.y,
+        z: frontPos.z,
+      },
       above: { name: above?.name ?? null },
     });
   }
@@ -174,7 +189,7 @@ export class Telemetry {
   }
 
   private snapshot(reason: string): void {
-    const e = this.bot.entity as (typeof this.bot.entity) & BotEntityExtras;
+    const e = this.bot.entity as typeof this.bot.entity & BotEntityExtras;
     if (!e) return;
 
     const { x, y, z } = e.position;

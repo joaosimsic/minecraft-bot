@@ -3,11 +3,7 @@ import { NAV_EVENT } from './Events';
 import type { AStarTelemetry } from '../planner/AStar';
 
 export class NavigationRecorder {
-  private readonly log: Logger;
-
-  public constructor(scope: string = 'navigation') {
-    this.log = new Logger(scope);
-  }
+  public constructor(private readonly log: Logger) {}
 
   public emit(type: string, data?: Record<string, unknown>): void {
     this.log.event(type, data);

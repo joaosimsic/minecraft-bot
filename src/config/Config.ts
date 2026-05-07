@@ -1,14 +1,12 @@
 import { z } from 'zod';
 import { Vec3 } from 'vec3';
+import { log } from './logger';
 import { envSchema, type Env } from './schemas';
 
 const result = envSchema.safeParse(process.env as NodeJS.ProcessEnv);
 
 if (!result.success) {
-  console.error(
-    'Invalid env vars:\n',
-    z.flattenError(result.error).fieldErrors,
-  );
+  log.error('Invalid env vars:\n', z.flattenError(result.error).fieldErrors);
   process.exit(1);
 }
 

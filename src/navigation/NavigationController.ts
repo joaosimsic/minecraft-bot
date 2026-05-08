@@ -9,7 +9,7 @@ import { NavigationExecutor } from './movement/Executor';
 import { NavigationValidator } from './movement/Validator';
 import { BotWorld } from './world/BotWorld';
 import { Collision } from './world/Collision';
-import type { Vec3 } from 'vec3';
+import { Vec3 } from 'vec3';
 import { config } from '../config';
 import { Logger } from '../shared/Logger';
 
@@ -18,6 +18,7 @@ const TRANSIENT_REPLAN_BUDGET = 6;
 const STUCK_TICKS = 36;
 
 export class NavigationController {
+  private readonly log: Logger;
   private readonly world: BotWorld;
   private readonly validator: NavigationValidator;
   private readonly edgeMemory: EdgeMemory;
@@ -53,7 +54,8 @@ export class NavigationController {
       void this.edgeMemory.persistSyncQuiet();
     });
     this.world = new BotWorld(bot);
-    this.recorder = new NavigationRecorder(new Logger('navigation', botId));
+    this.log = new Logger('navigation', botId);
+    this.recorder = new NavigationRecorder(this.log);
     this.recovery = new Recovery(
       REPLAN_BUDGET,
       TRANSIENT_REPLAN_BUDGET,
@@ -71,7 +73,15 @@ export class NavigationController {
 
   private readonly onPhysicsProbe = (): void => this.probeStuck();
 
-  public async walkTo(goal: Vec3, range: number): AsyncResult<boolean> {
+  public async walkTo(goalIn: Vec3, rangeIn: number): AsyncResult<boolean> {
+    const snap = this.snapGoal(goalIn, rangeIn);
+    if (snap === null) {
+      this.log.warn('plan_failed', 'goal_unsnappable');
+      return ok(false);
+    }
+    const goal = snap.goal;
+    const range = snap.range;
+
     if (this.bot.entity.position.distanceTo(goal) <= range) return ok(true);
 
     this.recovery.resetForNewGoal();
@@ -114,7 +124,10 @@ export class NavigationController {
         (): number => this.bot.time.age,
         expandOpts,
       );
-      if (planOp[0] !== null) return ok(false);
+      if (planOp[0] !== null) {
+        this.log.warn('plan_failed', planOp[0].message);
+        return ok(false);
+      }
 
       const plan = planOp[1];
       if (plan === null) return fail(new Error('plan'));
@@ -186,6 +199,27 @@ export class NavigationController {
     }
 
     return ok(false);
+  }
+
+  private snapGoal(
+    goalIn: Vec3,
+    rangeIn: number,
+  ): { goal: Vec3; range: number } | null {
+    const gx = Math.floor(goalIn.x);
+    const gy = Math.floor(goalIn.y);
+    const gz = Math.floor(goalIn.z);
+    const direct = Collision.destinationNode(this.world, gx, gy, gz, new Set());
+    if (Collision.canStandAt(this.world, direct)) {
+      return { goal: goalIn, range: rangeIn };
+    }
+
+    const snapped = Collision.findStandableNear(this.world, gx, gy, gz, 8);
+    if (snapped === null) return null;
+
+    const newGoal = new Vec3(snapped.x + 0.5, snapped.y, snapped.z + 0.5);
+    const dist = newGoal.distanceTo(goalIn);
+    const newRange = Math.max(rangeIn, dist + 0.5);
+    return { goal: newGoal, range: newRange };
   }
 
   private probeStuck(): void {

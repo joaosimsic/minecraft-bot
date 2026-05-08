@@ -1,7 +1,6 @@
 import type { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
 import { Logger } from '../shared/Logger';
-import { wrap } from '../shared/result';
 import type { Metrics } from '../shared/Metrics';
 import { NavigationController } from '../navigation/NavigationController';
 
@@ -52,7 +51,7 @@ export class Navigator {
       return true;
     }
 
-    const [navErr, reached] = await wrap(this.navigation.walkTo(target, range));
+    const [navErr, reached] = await this.navigation.walkTo(target, range);
     if (navErr) {
       this.log.warn('navigation stack error', navErr.message);
       this.log.event('walk_end', {

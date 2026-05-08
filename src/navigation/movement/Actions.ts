@@ -5,6 +5,8 @@ export const ACTION_KINDS = [
   'jump_up',
   'drop_down',
   'interact',
+  'swim_up',
+  'swim_down',
 ] as const;
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
@@ -12,7 +14,9 @@ export type NavigationAction =
   | WalkAction
   | JumpUpAction
   | DropDownAction
-  | InteractAction;
+  | InteractAction
+  | SwimUpAction
+  | SwimDownAction;
 
 export class WalkAction {
   public readonly kind = 'walk' as const;
@@ -104,6 +108,44 @@ export class InteractAction {
       from_node: this.from,
       to_node: this.to,
       target: { x: this.targetX, y: this.targetY, z: this.targetZ },
+    };
+  }
+}
+
+export class SwimUpAction {
+  public readonly kind = 'swim_up' as const;
+
+  public constructor(
+    public readonly actionId: string,
+    public readonly from: NodeKey,
+    public readonly to: NodeKey,
+  ) {}
+
+  public toTelemetry(): Record<string, unknown> {
+    return {
+      action_id: this.actionId,
+      kind: this.kind,
+      from_node: this.from,
+      to_node: this.to,
+    };
+  }
+}
+
+export class SwimDownAction {
+  public readonly kind = 'swim_down' as const;
+
+  public constructor(
+    public readonly actionId: string,
+    public readonly from: NodeKey,
+    public readonly to: NodeKey,
+  ) {}
+
+  public toTelemetry(): Record<string, unknown> {
+    return {
+      action_id: this.actionId,
+      kind: this.kind,
+      from_node: this.from,
+      to_node: this.to,
     };
   }
 }

@@ -15,12 +15,65 @@ export class Collision {
     return new Node(x, y, z, assumed, mc);
   }
 
+  public static findStandableNear(
+    world: World,
+    x: number,
+    y: number,
+    z: number,
+    maxDy: number,
+    maxXZ: number = 4,
+  ): Node | null {
+    const direct = Collision.destinationNode(world, x, y, z, new Set());
+    if (Collision.canStandAt(world, direct)) return direct;
+
+    let r = 0;
+    while (r <= maxXZ) {
+      let best: Node | null = null;
+      let bestScore = Infinity;
+      let dx = -r;
+      while (dx <= r) {
+        let dz = -r;
+        while (dz <= r) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) === r) {
+            let dy = 0;
+            while (dy <= maxDy) {
+              const ys = dy === 0 ? [0] : [-dy, dy];
+              for (const sy of ys) {
+                const cand = Collision.destinationNode(
+                  world,
+                  x + dx,
+                  y + sy,
+                  z + dz,
+                  new Set(),
+                );
+                if (!Collision.canStandAt(world, cand)) continue;
+                const score = dx * dx + dz * dz + sy * sy * 4;
+                if (score >= bestScore) continue;
+                best = cand;
+                bestScore = score;
+              }
+              dy += 1;
+            }
+          }
+          dz += 1;
+        }
+        dx += 1;
+      }
+      if (best !== null) return best;
+      r += 1;
+    }
+
+    return null;
+  }
+
   public static canStandAt(world: World, node: Node): boolean {
     if (world.hostileOccupiesCell(node.x, node.y, node.z)) return false;
     if (world.hostileOccupiesCell(node.x, node.y + 1, node.z)) return false;
 
-    const [below] = worldSupportAndBody(world, node);
-    if (!below.topSupportStand) return false;
+    if (node.movementClass !== 'water') {
+      const [below] = worldSupportAndBody(world, node);
+      if (!below.topSupportStand) return false;
+    }
 
     if (
       Collision.bodyBlocked(

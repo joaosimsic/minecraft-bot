@@ -336,17 +336,7 @@ export class LogPane {
     if (this.pendingVisible.length === 0) return;
 
     const taken = this.pendingVisible.splice(0, MAX_LOG_LINES_PER_UI_TICK);
-    const existing = this.logBox.getLines();
-    const merged: string[] =
-      existing.length === 1 && existing[0] === '' ? [] : existing.slice();
-
-    for (const line of taken) merged.push(this.formatLogLine(line));
-
-    if (merged.length > LOG_SCROLLBACK) {
-      merged.splice(0, merged.length - LOG_SCROLLBACK);
-    }
-
-    this.logBox.setContent(merged.join('\n'));
+    for (const line of taken) this.logBox.log(this.formatLogLine(line));
 
     if (this.logFollowBottom) this.logBox.setScrollPerc(100);
     this.scheduleRender();

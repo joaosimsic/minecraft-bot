@@ -1,3 +1,4 @@
+import { config } from '../../config';
 import { Logger } from '../../shared/Logger';
 import { NAV_EVENT } from './Events';
 import type { AStarTelemetry } from '../planner/AStar';
@@ -10,6 +11,8 @@ export class NavigationRecorder {
   }
 
   public aStarHooks(): AStarTelemetry {
+    const trace = config.env.NAV_TRACE;
+    const noop = (): void => undefined;
     return {
       searchStart: (data: Record<string, unknown>): void => {
         this.log.event(NAV_EVENT.SEARCH_START, data);
@@ -19,21 +22,27 @@ export class NavigationRecorder {
         this.log.event(NAV_EVENT.SEARCH_END, data);
       },
 
-      nodeExpand: (data: Record<string, unknown>): void => {
-        this.log.event(NAV_EVENT.NODE_EXPAND, data);
-      },
+      nodeExpand: trace
+        ? (data: Record<string, unknown>): void => {
+            this.log.event(NAV_EVENT.NODE_EXPAND, data);
+          }
+        : noop,
 
       pathSelected: (data: Record<string, unknown>): void => {
         this.log.event(NAV_EVENT.PATH_SELECTED, data);
       },
 
-      candidateGenerated: (data: Record<string, unknown>): void => {
-        this.log.event(NAV_EVENT.CANDIDATE_GENERATED, data);
-      },
+      candidateGenerated: trace
+        ? (data: Record<string, unknown>): void => {
+            this.log.event(NAV_EVENT.CANDIDATE_GENERATED, data);
+          }
+        : noop,
 
-      candidateRejected: (data: Record<string, unknown>): void => {
-        this.log.event(NAV_EVENT.CANDIDATE_REJECTED, data);
-      },
+      candidateRejected: trace
+        ? (data: Record<string, unknown>): void => {
+            this.log.event(NAV_EVENT.CANDIDATE_REJECTED, data);
+          }
+        : noop,
     };
   }
 }

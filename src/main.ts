@@ -295,7 +295,6 @@ class BotRunner {
         kernel.controller.halt();
         kernel.telemetry.stop();
         this.fleet.markDisconnected(username);
-        if (this.fleet.onlineCount() === 0) this.shutdown();
       });
     }
 

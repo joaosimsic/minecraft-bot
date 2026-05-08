@@ -23,6 +23,10 @@ export const botSchema = {
     .enum(['0', '1'])
     .default('0')
     .transform((s): boolean => s === '1'),
+  NAV_TRACE: z
+    .enum(['0', '1'])
+    .default('0')
+    .transform((s): boolean => s === '1'),
   NAV_EDGE_MEMORY_FILE: z.string().min(1).optional(),
   NAV_EDGE_MEMORY_MAX_ENTRIES: z.coerce.number().int().min(1).default(4000),
   NAV_EDGE_MEMORY_SAVE_EVERY_FAILURES: z.coerce

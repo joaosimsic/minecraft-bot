@@ -25,6 +25,7 @@ const WALK_MIDCHECK_EVERY_TICKS = 8;
 const MAX_JUMP_TICKS = 45;
 const MAX_DROP_TICKS = 55;
 const MAX_INTERACT_TICKS = 48;
+const MAX_SWIM_TICKS = 80;
 
 function outcomeObserved(err: Error): Record<string, unknown> | undefined {
   if (err instanceof ValidationError) return err.observed;
@@ -191,6 +192,12 @@ export class NavigationExecutor {
         return;
       case 'interact':
         await this.stepInteract(cur);
+        return;
+      case 'swim_up':
+        await this.stepSwim(cur, 1);
+        return;
+      case 'swim_down':
+        await this.stepSwim(cur, -1);
         return;
       default: {
         const _exhaustive: never = k;
@@ -404,6 +411,49 @@ export class NavigationExecutor {
 
     const perr = post[0];
     if (this.actionTicks >= MAX_DROP_TICKS) {
+      this.finish(
+        ok({
+          done: false,
+          action: cur,
+          reason: perr.message,
+          phase: 'post_action',
+          observed: outcomeObserved(perr),
+        }),
+      );
+    }
+  }
+
+  private async stepSwim(
+    cur: NavigationAction & { kind: 'swim_up' | 'swim_down' },
+    dy: 1 | -1,
+  ): Promise<void> {
+    if (dy === 1) this.bot.setControlState('jump', true);
+    if (dy === -1) this.bot.setControlState('jump', false);
+
+    const post = this.validator.postAction(
+      this.world,
+      this.bot,
+      cur,
+      this.gameTick(),
+    );
+    if (post[0] === null) {
+      this.recorder.emit(NAV_EVENT.MOVEMENT_COMPLETE, {
+        action: cur.toTelemetry(),
+        pos: {
+          x: this.bot.entity.position.x,
+          y: this.bot.entity.position.y,
+          z: this.bot.entity.position.z,
+        },
+      });
+      this.working = null;
+      this.bot.setControlState('jump', false);
+      if (this.queue.length === 0) this.finish(ok({ done: true }));
+      return;
+    }
+
+    const perr = post[0];
+    if (this.actionTicks >= MAX_SWIM_TICKS) {
+      this.bot.setControlState('jump', false);
       this.finish(
         ok({
           done: false,

@@ -13,6 +13,8 @@ import {
   DropDownAction,
   InteractAction,
   JumpUpAction,
+  SwimDownAction,
+  SwimUpAction,
   WalkAction,
   type NavigationAction,
 } from '../movement/Actions';
@@ -103,6 +105,8 @@ export class NeighborGenerator {
       );
     }
 
+    if (a.kind === 'swim_up' || a.kind === 'swim_down') return true;
+
     const ai = a as InteractAction;
     const bi = b as InteractAction;
     return (
@@ -169,6 +173,25 @@ export class NeighborGenerator {
           );
         }
       }
+    }
+
+    if (from.movementClass === 'water') {
+      NeighborGenerator.trySwim(
+        world,
+        from,
+        1,
+        nextActionId,
+        emitTelemetry,
+        byDest,
+      );
+      NeighborGenerator.trySwim(
+        world,
+        from,
+        -1,
+        nextActionId,
+        emitTelemetry,
+        byDest,
+      );
     }
 
     const keys = [...byDest.keys()].sort(compareNodeKey);
@@ -434,6 +457,67 @@ export class NeighborGenerator {
     emitTelemetry?.('candidate_generated', {
       from: from.key,
       to: land.key,
+      action: action.toTelemetry(),
+    });
+  }
+
+  private static trySwim(
+    world: World,
+    from: Node,
+    dy: 1 | -1,
+    nextActionId: (kind: string, a: Node, b: Node) => string,
+    emitTelemetry:
+      | ((
+          name: 'candidate_generated' | 'candidate_rejected',
+          data: Record<string, unknown>,
+        ) => void)
+      | undefined,
+    byDest: Map<NodeKey, Neighbor>,
+  ): void {
+    const ny = from.y + dy;
+    const to = Collision.destinationNode(
+      world,
+      from.x,
+      ny,
+      from.z,
+      from.assumedOpenDoors,
+    );
+    const reason = dy === 1 ? 'swim_up_blocked' : 'swim_down_blocked';
+
+    if (dy === -1 && to.movementClass !== 'water') {
+      emitTelemetry?.('candidate_rejected', {
+        from: from.key,
+        to: to.key,
+        reason,
+      });
+      return;
+    }
+
+    if (!Collision.canStandAt(world, to)) {
+      emitTelemetry?.('candidate_rejected', {
+        from: from.key,
+        to: to.key,
+        reason,
+      });
+      return;
+    }
+
+    const kind = dy === 1 ? 'swim_up' : 'swim_down';
+    const action =
+      dy === 1
+        ? new SwimUpAction(nextActionId(kind, from, to), from.key, to.key)
+        : new SwimDownAction(nextActionId(kind, from, to), from.key, to.key);
+
+    const neighbor: Neighbor = {
+      to,
+      action,
+      edgeCost: 2,
+    };
+    if (!NeighborGenerator.offer(byDest, neighbor)) return;
+
+    emitTelemetry?.('candidate_generated', {
+      from: from.key,
+      to: to.key,
       action: action.toTelemetry(),
     });
   }

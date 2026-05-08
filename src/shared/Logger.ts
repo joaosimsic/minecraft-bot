@@ -127,7 +127,9 @@ export class Logger {
     reason: string,
     data?: Record<string, unknown>,
   ): void {
-    this.debug(`decision: ${action} <- ${reason}`, data ?? '');
+    const suffix = data !== undefined ? `\n${JSON.stringify(data)}` : '';
+    this.debug(`decision: ${action} <- ${reason}${suffix}`);
+
     sink.writeEvent({
       ts: new Date().toISOString(),
       type: 'decision',

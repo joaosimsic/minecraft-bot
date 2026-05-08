@@ -2,6 +2,7 @@ import blessed from 'blessed';
 import type { FleetRowSnapshot } from '../core/BotFleet';
 import type { UiLogLine, LogLevel } from '../shared/Logger';
 import { LogStore, logLineMatchesDisplayFilters } from './LogStore';
+import { logInnerDisplayWidth, wrapUiLogLine } from './logLineWrap';
 import type { ScreenFrame } from './ScreenFrame';
 
 const MULTI_LOG_LINE_CAP = 20;
@@ -79,7 +80,7 @@ export class LogPane {
       border: 'line',
       label: ' log ',
       tags: true,
-      wrap: true,
+      wrap: false,
       scrollable: true,
       alwaysScroll: false,
       mouse: true,
@@ -135,6 +136,25 @@ export class LogPane {
   public setLogLevelMin(level: LogLevel | null): void {
     this.logMinLevel = level;
     this.refillLogFromStore();
+  }
+
+  public onViewportResize(): void {
+    if (this.multiLogMode) {
+      this.fillMultiColumnContents(this.lastOnlineBotIds);
+      this.scheduleRender();
+      return;
+    }
+    const lines = this.logStore.getDisplayLines(
+      this.logFilterBotId,
+      this.logMinLevel,
+    );
+    const inner = logInnerDisplayWidth(this.logBox);
+    const text = lines
+      .flatMap((l): string[] => wrapUiLogLine(this.formatLogLine(l), inner))
+      .join('\n');
+    this.logBox.setContent(text);
+    if (this.logFollowBottom) this.logBox.setScrollPerc(100);
+    this.scheduleRender();
   }
 
   public appendLogLine(line: UiLogLine): void {
@@ -282,7 +302,7 @@ export class LogPane {
         border: 'line',
         label: ` ${id} `,
         tags: true,
-        wrap: true,
+        wrap: false,
         scrollable: true,
         mouse: true,
         scrollbar: {
@@ -307,7 +327,10 @@ export class LogPane {
         MULTI_LOG_LINE_CAP,
         this.logMinLevel,
       );
-      const text = lines.map((l): string => l.text).join('\n');
+      const inner = logInnerDisplayWidth(col);
+      const text = lines
+        .flatMap((l): string[] => wrapUiLogLine(l.text, inner))
+        .join('\n');
       col.setContent(text);
       col.setScrollPerc(100);
     }
@@ -345,7 +368,11 @@ export class LogPane {
     if (this.pendingVisible.length === 0) return;
 
     const taken = this.pendingVisible.splice(0, MAX_LOG_LINES_PER_UI_TICK);
-    for (const line of taken) this.logBox.log(this.formatLogLine(line));
+    const inner = logInnerDisplayWidth(this.logBox);
+    for (const line of taken) {
+      const wrapped = wrapUiLogLine(this.formatLogLine(line), inner);
+      this.logBox.log(wrapped.join('\n'));
+    }
 
     if (this.logFollowBottom) this.logBox.setScrollPerc(100);
     this.scheduleRender();
@@ -364,7 +391,10 @@ export class LogPane {
       this.logFilterBotId,
       this.logMinLevel,
     );
-    const text = lines.map((l): string => this.formatLogLine(l)).join('\n');
+    const inner = logInnerDisplayWidth(this.logBox);
+    const text = lines
+      .flatMap((l): string[] => wrapUiLogLine(this.formatLogLine(l), inner))
+      .join('\n');
     this.logBox.setContent(text);
     this.logBox.setScrollPerc(100);
     this.logFollowBottom = true;

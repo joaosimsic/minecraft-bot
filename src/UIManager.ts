@@ -178,6 +178,7 @@ export class UIManager implements InputUiBridge {
 
     this.frame.screen.on('resize', (): void => {
       this.checkMinTerminal();
+      this.logPane.onViewportResize();
       this.scheduleRender();
     });
 

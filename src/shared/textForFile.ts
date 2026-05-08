@@ -7,5 +7,5 @@ export function stripBlessedTags(s: string): string {
 }
 
 export function sanitizeForFileLine(s: string): string {
-  return stripBlessedTags(stripAnsi(s));
+  return stripBlessedTags(stripAnsi(s)).replace(/\n/g, ' ');
 }

@@ -16,26 +16,107 @@ type BlockProps = { half?: string; open?: string | boolean };
 
 const DOOR_RE = /door/i;
 
+export type EnvMovementDelta = {
+  x: number;
+  y: number;
+  z: number;
+  blockName: string;
+  movementClassBefore: MovementClass;
+  movementClassAfter: MovementClass;
+};
+
+export type BotWorldEnvOpts = {
+  onMovementClassDelta?: (d: EnvMovementDelta) => void;
+};
+
 export class BotWorld implements World {
   private readonly cache = new Map<string, WorldCell>();
   private readonly closedDoorCache = new Map<string, boolean>();
   private readonly hostileCache = new Map<string, boolean>();
 
-  public constructor(private readonly bot: Bot) {
+  public constructor(
+    private readonly bot: Bot,
+    private readonly envOpts?: BotWorldEnvOpts,
+  ) {
     const bump = (): void => {
       this.cache.clear();
       this.closedDoorCache.clear();
       this.hostileCache.clear();
     };
 
-    bot.on(
-      'blockUpdate',
-      (_oldBlock: Block | null, _newBlock: Block | null) => {
-        void _oldBlock;
-        void _newBlock;
+    bot.on('blockUpdate', (oldBlock: Block | null, newBlock: Block | null) => {
+      const pos = BotWorld.blockEventPos(oldBlock, newBlock);
+      if (pos === null) {
         bump();
-      },
-    );
+        return;
+      }
+
+      const ent = bot.entity;
+      if (ent === undefined) {
+        bump();
+        return;
+      }
+
+      const ex = Math.floor(ent.position.x);
+      const ey = Math.floor(ent.position.y);
+      const ez = Math.floor(ent.position.z);
+      if (BotWorld.chebyshev(pos.x, pos.y, pos.z, ex, ey, ez) > 8) {
+        bump();
+        return;
+      }
+
+      const hook = this.envOpts?.onMovementClassDelta;
+      const rx = pos.x;
+      const ry = pos.y;
+      const rz = pos.z;
+      const nameSrc = newBlock ?? oldBlock;
+      const blockName = nameSrc === null ? 'air' : nameSrc.name;
+
+      if (hook !== undefined) {
+        const affected = [
+          { x: rx, y: ry, z: rz },
+          { x: rx, y: ry + 1, z: rz },
+        ];
+        for (const f of affected) {
+          if (BotWorld.chebyshev(f.x, f.y, f.z, ex, ey, ez) > 8) continue;
+          const mcOld = BotWorld.footMovementClassResolved(
+            bot,
+            rx,
+            ry,
+            rz,
+            oldBlock,
+            newBlock,
+            'old',
+            f.x,
+            f.y,
+            f.z,
+          );
+          const mcNew = BotWorld.footMovementClassResolved(
+            bot,
+            rx,
+            ry,
+            rz,
+            oldBlock,
+            newBlock,
+            'new',
+            f.x,
+            f.y,
+            f.z,
+          );
+          if (mcOld === mcNew) continue;
+          hook({
+            x: f.x,
+            y: f.y,
+            z: f.z,
+            blockName,
+            movementClassBefore: mcOld,
+            movementClassAfter: mcNew,
+          });
+        }
+      }
+
+      bump();
+    });
   }
 
   public cell(x: number, y: number, z: number): WorldCell {
@@ -52,19 +133,45 @@ export class BotWorld implements World {
   private footMcLogCount = 0;
 
   public footMovementClass(x: number, y: number, z: number): MovementClass {
-    const b = this.bot.blockAt(new Vec3(x, y, z));
+    const r = BotWorld.footMovementClassAt(
+      (ix, iy, iz): Block | null => this.bot.blockAt(new Vec3(ix, iy, iz)),
+      x,
+      y,
+      z,
+    );
+    if (this.footMcLogCount < 5) {
+      this.footMcLogCount += 1;
+      const b = this.bot.blockAt(new Vec3(x, y, z));
+      debugLog(
+        'BotWorld.ts:footMovementClass',
+        'mc query',
+        {
+          x,
+          y,
+          z,
+          blockName: b?.name ?? 'NULL',
+          bb: b?.boundingBox ?? 'NULL',
+          result: r,
+        },
+        'H9',
+      );
+    }
+    return r;
+  }
+
+  public static footMovementClassAt(
+    blockAt: (ix: number, iy: number, iz: number) => Block | null,
+    x: number,
+    y: number,
+    z: number,
+  ): MovementClass {
+    const b = blockAt(x, y, z);
     if (b === null) return 'ground';
     if (FLUID_RE.test(b.name)) return 'water';
     if (b.name === 'air' || b.boundingBox === 'empty') {
-      const below = this.bot.blockAt(new Vec3(x, y - 1, z));
+      const below = blockAt(x, y - 1, z);
       if (below !== null && FLUID_RE.test(below.name)) return 'water';
     }
-    // #region agent log
-    if (this.footMcLogCount < 5) {
-      this.footMcLogCount += 1;
-      debugLog('BotWorld.ts:footMovementClass', 'mc query', { x, y, z, blockName: b.name, bb: b.boundingBox, result: 'ground' }, 'H9');
-    }
-    // #endregion
     return 'ground';
   }
 
@@ -102,6 +209,75 @@ export class BotWorld implements World {
     const v = BotWorld.isClosedDoorBlock(b);
     this.closedDoorCache.set(key, v);
     return v;
+  }
+
+  private static chebyshev(
+    ax: number,
+    ay: number,
+    az: number,
+    bx: number,
+    by: number,
+    bz: number,
+  ): number {
+    const dx = Math.abs(ax - bx);
+    const dy = Math.abs(ay - by);
+    const dz = Math.abs(az - bz);
+    return Math.max(dx, dy, dz);
+  }
+
+  private static blockEventPos(
+    oldBlock: Block | null,
+    newBlock: Block | null,
+  ): { x: number; y: number; z: number } | null {
+    const b = newBlock ?? oldBlock;
+    if (b === null) return null;
+    return { x: b.position.x, y: b.position.y, z: b.position.z };
+  }
+
+  private static blockAtPhased(
+    bot: Bot,
+    rx: number,
+    ry: number,
+    rz: number,
+    oldBlock: Block | null,
+    newBlock: Block | null,
+    phase: 'old' | 'new',
+    ix: number,
+    iy: number,
+    iz: number,
+  ): Block | null {
+    if (ix === rx && iy === ry && iz === rz) {
+      return phase === 'old' ? oldBlock : newBlock;
+    }
+    return bot.blockAt(new Vec3(ix, iy, iz));
+  }
+
+  private static footMovementClassResolved(
+    bot: Bot,
+    rx: number,
+    ry: number,
+    rz: number,
+    oldBlock: Block | null,
+    newBlock: Block | null,
+    phase: 'old' | 'new',
+    fx: number,
+    fy: number,
+    fz: number,
+  ): MovementClass {
+    const resolve = (ix: number, iy: number, iz: number): Block | null =>
+      BotWorld.blockAtPhased(
+        bot,
+        rx,
+        ry,
+        rz,
+        oldBlock,
+        newBlock,
+        phase,
+        ix,
+        iy,
+        iz,
+      );
+    return BotWorld.footMovementClassAt(resolve, fx, fy, fz);
   }
 
   private static posKey(x: number, y: number, z: number): string {

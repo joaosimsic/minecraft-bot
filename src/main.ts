@@ -28,8 +28,40 @@ class BotRunner {
   private shuttingDown = false;
   private readonly logOutlet = new LogUiOutlet();
   private webCompanion: WebCompanion | null = null;
-
   private readonly uiBus = new UiEventBus();
+  private lastWorldEmitFocus = '';
+  private lastWorldEmitCol = Number.NaN;
+  private lastWorldEmitRow = Number.NaN;
+
+  private maybeEmitCompanionWorldGrid(): void {
+    const fid = this.fleet.focusedId();
+    const k = this.fleet.focusedKernel();
+    if (k === null) return;
+    const e = k.bot.entity;
+    if (e === undefined) return;
+    const col = Math.floor(e.position.x);
+    const row = Math.floor(e.position.z);
+    if (fid !== this.lastWorldEmitFocus) {
+      this.lastWorldEmitFocus = fid;
+      this.lastWorldEmitCol = Number.NaN;
+      this.lastWorldEmitRow = Number.NaN;
+    }
+    if (col === this.lastWorldEmitCol && row === this.lastWorldEmitRow) return;
+    this.lastWorldEmitCol = col;
+    this.lastWorldEmitRow = row;
+    const snap = k.movementGrid16();
+    if (snap === null) return;
+    const cells = snap.cells.map((c): string => (c === 'water' ? 'w' : 'g'));
+    this.uiBus.emitCompanion({
+      type: 'world_grid',
+      botId: k.botId,
+      anchorX: snap.anchorX,
+      anchorY: snap.anchorY,
+      anchorZ: snap.anchorZ,
+      side: snap.side,
+      cells,
+    });
+  }
 
   private shouldUseProxy(): boolean {
     const { DISABLE_PROXY, FORCE_PROXY, VERSION } = config.env;
@@ -236,6 +268,7 @@ class BotRunner {
         focusedId: this.fleet.focusedId(),
         homeXZ: this.fleet.homeXZ(),
       });
+      this.maybeEmitCompanionWorldGrid();
     });
 
     const toUi = (msg: string): void => {
@@ -262,8 +295,11 @@ class BotRunner {
 
     for (const username of config.env.usernames) {
       const bot = this.createBot(username);
-      const kernel = new BotKernel(bot, username, (): void =>
-        this.fleet.touchStatus(),
+      const kernel = new BotKernel(
+        bot,
+        username,
+        (): void => this.fleet.touchStatus(),
+        (msg): void => this.uiBus.emitCompanion(msg),
       );
       this.fleet.register(kernel);
 

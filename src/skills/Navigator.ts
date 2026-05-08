@@ -1,6 +1,7 @@
 import type { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
 import { Logger } from '../shared/Logger';
+import { withNavigatorTrace } from '../shared/traceContext';
 import type { Metrics } from '../shared/Metrics';
 import { NavigationController } from '../navigation/NavigationController';
 
@@ -25,6 +26,12 @@ export class Navigator {
   }
 
   public async walkTo(target: Vec3, range = 1): Promise<boolean> {
+    return withNavigatorTrace(async (): Promise<boolean> => {
+      return this.walkToInner(target, range);
+    });
+  }
+
+  private async walkToInner(target: Vec3, range: number): Promise<boolean> {
     target = Navigator.centerBlock(target);
 
     const start = this.bot.entity.position;

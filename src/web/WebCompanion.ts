@@ -30,6 +30,7 @@ function dashboardHtml(): string {
 <style>
 body{font-family:ui-monospace,monospace;margin:0;padding:12px;background:#0b0f14;color:#e6edf3}
 h1{font-size:16px;margin:0 0 12px}
+h2{font-size:13px;margin:0 0 8px;color:#8b949e;font-weight:600}
 .grid{display:grid;grid-template-columns:1fr;gap:12px}
 @media(min-width:900px){.grid{grid-template-columns:1fr 1fr}}
 .panel{border:1px solid #30363d;border-radius:6px;padding:10px;background:#10161d}
@@ -38,6 +39,9 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
 .on{color:#3fb950}.off{color:#f85149}
 #log{white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;font-size:12px;line-height:1.35}
 #meta{font-size:12px;color:#8b949e;margin-bottom:8px}
+#worldCanvas{display:block;border:1px solid #30363d;border-radius:4px;background:#161b22;image-rendering:pixelated}
+#envList{font-size:11px;color:#8b949e;max-height:120px;overflow:auto;margin-top:8px}
+.legend{font-size:11px;color:#8b949e;margin-top:6px}
 </style>
 </head>
 <body>
@@ -52,6 +56,12 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
 </div>
 </div>
 <div class="panel" style="margin-top:12px">
+<h2>worldview (movement class)</h2>
+<canvas id="worldCanvas" width="256" height="256"></canvas>
+<div class="legend">green=ground blue=water · magenta=path · red=rejected</div>
+<div id="envList"></div>
+</div>
+<div class="panel" style="margin-top:12px">
 <div id="log"></div>
 </div>
 <script>
@@ -60,7 +70,102 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
   const focusedEl = document.getElementById('focused');
   const logEl = document.getElementById('log');
   const wsEl = document.getElementById('ws');
+  const canvas = document.getElementById('worldCanvas');
+  const ctx = canvas && canvas.getContext ? canvas.getContext('2d') : null;
+  const envListEl = document.getElementById('envList');
   let lines = [];
+  let gridState = { ax: 0, ay: 0, az: 0, side: 16, cells: [] };
+  let pathCells = [];
+  let rejectCells = [];
+
+  function parseNodeXZ(key) {
+    if (!key) return null;
+    const base = String(key).split('|')[0];
+    const parts = base.split(',');
+    if (parts.length < 3) return null;
+    const x = Number(parts[0]);
+    const z = Number(parts[2]);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    return { x: x, z: z };
+  }
+
+  function toGridXZ(wx, wz) {
+    const dx = wx - gridState.ax;
+    const dz = wz - gridState.az;
+    if (dx < -8 || dx > 7 || dz < -8 || dz > 7) return null;
+    return { gx: dx + 8, gz: dz + 8 };
+  }
+
+  function drawWorld() {
+    if (!ctx || !canvas) return;
+    const side = gridState.side || 16;
+    const cw = canvas.width / side;
+    const ch = canvas.height / side;
+    const cells = gridState.cells || [];
+    for (let gz = 0; gz < side; gz++) {
+      for (let gx = 0; gx < side; gx++) {
+        const idx = gz * side + gx;
+        const c = cells[idx] === 'w' ? '#1f6feb' : '#238636';
+        ctx.fillStyle = c;
+        ctx.fillRect(gx * cw, gz * ch, cw + 0.5, ch + 0.5);
+      }
+    }
+    ctx.fillStyle = 'rgba(219, 97, 162, 0.55)';
+    for (const p of pathCells) {
+      if (p.gx < 0 || p.gz < 0 || p.gx >= side || p.gz >= side) continue;
+      ctx.fillRect(p.gx * cw, p.gz * ch, cw + 0.5, ch + 0.5);
+    }
+    ctx.fillStyle = 'rgba(248, 81, 73, 0.65)';
+    for (const p of rejectCells) {
+      if (p.gx < 0 || p.gz < 0 || p.gx >= side || p.gz >= side) continue;
+      ctx.fillRect(p.gx * cw + cw * 0.25, p.gz * ch + ch * 0.25, cw * 0.5, ch * 0.5);
+    }
+  }
+
+  function applyNavTrace(msg) {
+    if (!msg || msg.type !== 'nav_trace') return;
+    const nk = msg.navKind;
+    const data = msg.data || {};
+    if (nk === 'path_selected') {
+      rejectCells = [];
+      const actions = data.actions;
+      pathCells = [];
+      if (Array.isArray(actions)) {
+        for (const a of actions) {
+          const to = a && a.to_node ? parseNodeXZ(String(a.to_node)) : null;
+          if (!to) continue;
+          const g = toGridXZ(to.x, to.z);
+          if (g) pathCells.push(g);
+        }
+      }
+      drawWorld();
+      return;
+    }
+    if (nk === 'candidate_rejected') {
+      const toK = data.to ? parseNodeXZ(String(data.to)) : null;
+      if (!toK) return;
+      const g = toGridXZ(toK.x, toK.z);
+      if (g) {
+        rejectCells.push(g);
+        if (rejectCells.length > 400) rejectCells = rejectCells.slice(-400);
+      }
+      drawWorld();
+    }
+  }
+
+  function applyWorldGrid(msg) {
+    if (!msg || msg.type !== 'world_grid') return;
+    gridState = {
+      ax: Number(msg.anchorX) || 0,
+      ay: Number(msg.anchorY) || 0,
+      az: Number(msg.anchorZ) || 0,
+      side: Number(msg.side) || 16,
+      cells: Array.isArray(msg.cells) ? msg.cells : [],
+    };
+    pathCells = [];
+    rejectCells = [];
+    drawWorld();
+  }
 
   function row(on, cols) {
     const tr = document.createElement('tr');
@@ -89,6 +194,22 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
     return parts.filter((s)=>s.length>0).join(' | ');
   }
 
+  function renderEnvTail(p) {
+    if (!envListEl) return;
+    envListEl.textContent = '';
+    const tail = p && p.envTail ? p.envTail : [];
+    if (tail.length === 0) {
+      envListEl.textContent = 'no env_update in replay tail';
+      return;
+    }
+    for (const e of tail) {
+      const row = document.createElement('div');
+      const tid = e.trace_id ? ' trace=' + String(e.trace_id).slice(0, 8) : '';
+      row.textContent = String(e.ts).slice(11, 23) + ' ' + String(e.botId) + ' @' + e.x + ',' + e.y + ',' + e.z + ' ' + String(e.blockName) + ' ' + String(e.movementClassBefore) + '→' + String(e.movementClassAfter) + tid;
+      envListEl.appendChild(row);
+    }
+  }
+
   function applyStatus(p) {
     if (!fleetBody || !focusedEl) return;
     fleetBody.textContent = '';
@@ -107,6 +228,7 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
     }
     const f = p ? p.focused : null;
     focusedEl.textContent = fmtFocus(f);
+    renderEnvTail(p);
   }
 
   function pushLogLine(line) {
@@ -154,6 +276,8 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
     if (msg.type === 'snapshot') hydrateSnapshot(msg);
     if (msg.type === 'status') applyStatus(msg.payload);
     if (msg.type === 'log') pushLogLine(msg.line);
+    if (msg.type === 'world_grid') applyWorldGrid(msg);
+    if (msg.type === 'nav_trace') applyNavTrace(msg);
   };
 })();
 </script>
@@ -168,6 +292,7 @@ export class WebCompanion {
   private readonly sockets = new Set<Bun.ServerWebSocket<WsData>>();
   private unsubLog: (() => void) | null = null;
   private unsubStatus: (() => void) | null = null;
+  private unsubCompanion: (() => void) | null = null;
   private lastStatus: UiStatusPayload | null = null;
   private readonly logRing: UiLogLine[] = [];
 
@@ -268,8 +393,12 @@ export class WebCompanion {
         payload,
       });
     });
+    const uCo = bus.onCompanion((msg): void => {
+      this.broadcast(msg);
+    });
     this.unsubLog = uLog;
     this.unsubStatus = uSt;
+    this.unsubCompanion = uCo;
   }
 
   public start(
@@ -300,6 +429,10 @@ export class WebCompanion {
         this.unsubStatus();
         this.unsubStatus = null;
       }
+      if (this.unsubCompanion !== null) {
+        this.unsubCompanion();
+        this.unsubCompanion = null;
+      }
 
       const err = e instanceof Error ? e : new Error(String(e));
       return [err];
@@ -318,6 +451,10 @@ export class WebCompanion {
     if (this.unsubStatus !== null) {
       this.unsubStatus();
       this.unsubStatus = null;
+    }
+    if (this.unsubCompanion !== null) {
+      this.unsubCompanion();
+      this.unsubCompanion = null;
     }
     const copy = new Set(this.sockets);
     for (const w of copy) w.close();

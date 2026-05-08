@@ -10,6 +10,7 @@ import { ModeController } from './ModeController';
 import { Telemetry } from './Telemetry';
 import { config } from '../config';
 import { NavigationController } from '../navigation/NavigationController';
+import type { MovementClass } from '../navigation/world/World';
 import { BotRuntimeContext } from './BotRuntimeContext';
 import { Logger } from '../shared/Logger';
 import { Metrics } from '../shared/Metrics';
@@ -32,13 +33,18 @@ export class BotKernel {
   public readonly controller: ModeController;
   public readonly telemetry: Telemetry;
 
-  public constructor(bot: Bot, botId: string, onModeUi: () => void) {
+  public constructor(
+    bot: Bot,
+    botId: string,
+    onModeUi: () => void,
+    companionEmit?: (msg: Record<string, unknown>) => void,
+  ) {
     this.bot = bot;
     this.botId = botId;
     this.metrics = new Metrics();
     this.runtime = new BotRuntimeContext(config.env);
     this.door = new Door(bot, botId, this.metrics);
-    this.navigation = new NavigationController(bot, botId);
+    this.navigation = new NavigationController(bot, botId, companionEmit);
     this.navigator = new Navigator(bot, this.navigation, botId, this.metrics);
     this.mine = new Mine(bot, this.navigator, botId, this.metrics);
     this.craft = new Craft(bot, botId);
@@ -79,5 +85,15 @@ export class BotKernel {
     this.bot.on('move', this.touchStatusThrottled);
     this.bot.on('physicTick', this.touchStatusThrottled);
     this.bot.on('spawn', () => this.guidedMode.onRespawn());
+  }
+
+  public movementGrid16(): {
+    anchorX: number;
+    anchorY: number;
+    anchorZ: number;
+    side: number;
+    cells: MovementClass[];
+  } | null {
+    return this.navigation.movementGrid16AroundBot();
   }
 }

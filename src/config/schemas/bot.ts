@@ -43,4 +43,18 @@ export const botSchema = {
   WEB_BIND: z.string().min(1).default('127.0.0.1'),
   WEB_PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   WEB_COMPANION: z.enum(['0', '1']).optional(),
+
+  TELEMETRY_ENDPOINT: z.preprocess(
+    (v): unknown => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
+  TELEMETRY_SESSION_ID: z.preprocess(
+    (v): unknown => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  TELEMETRY_SERVICE_NAME: z.preprocess(
+    (v): unknown =>
+      typeof v === 'string' && v.trim().length > 0 ? v.trim() : 'minecraft-bot',
+    z.string().min(1),
+  ),
 };

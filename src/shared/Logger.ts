@@ -1,5 +1,6 @@
-import { sink } from './Sink';
+import { sink, type SinkEvent } from './Sink';
 import { sanitizeForFileLine } from './textForFile';
+import { getTraceId } from './traceContext';
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
@@ -113,13 +114,16 @@ export class Logger {
   }
 
   public event(type: string, data?: Record<string, unknown>): void {
-    sink.writeEvent({
+    const traceId = getTraceId();
+    const base: SinkEvent = {
       ts: new Date().toISOString(),
       type,
       scope: this.prefix,
       botId: this.botId,
       data,
-    });
+    };
+    if (traceId !== undefined) base.trace_id = traceId;
+    sink.writeEvent(base);
   }
 
   public decision(
@@ -130,12 +134,15 @@ export class Logger {
     const suffix = data !== undefined ? `\n${JSON.stringify(data)}` : '';
     this.debug(`decision: ${action} <- ${reason}${suffix}`);
 
-    sink.writeEvent({
+    const traceId = getTraceId();
+    const ev: SinkEvent = {
       ts: new Date().toISOString(),
       type: 'decision',
       scope: this.prefix,
       botId: this.botId,
       data: { action, reason, ...(data ?? {}) },
-    });
+    };
+    if (traceId !== undefined) ev.trace_id = traceId;
+    sink.writeEvent(ev);
   }
 }

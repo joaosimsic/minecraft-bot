@@ -29,7 +29,7 @@ export class CaptureRecorder extends NavigationRecorder {
   }> = [];
 
   public constructor(scope = 'capture') {
-    super(new Logger('navigation', scope));
+    super(new Logger('navigation', scope), scope, null);
   }
   public override emit(type: string, data?: Record<string, unknown>): void {
     this.frames.push({ type, data });

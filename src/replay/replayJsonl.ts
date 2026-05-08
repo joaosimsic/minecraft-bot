@@ -7,6 +7,7 @@ const eventSchema = z.object({
   type: z.string(),
   scope: z.string().optional(),
   botId: z.string().optional(),
+  trace_id: z.string().optional(),
   data: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -36,16 +37,15 @@ export function parseReplayJsonlLine(
   const parsed = eventSchema.safeParse(raw);
   if (!parsed.success) return [new Error('invalid event shape'), null];
   const d = parsed.data;
-  return [
-    null,
-    {
-      ts: d.ts,
-      type: d.type,
-      scope: d.scope,
-      botId: d.botId,
-      data: d.data,
-    },
-  ];
+  const out: SinkEvent = {
+    ts: d.ts,
+    type: d.type,
+    scope: d.scope,
+    botId: d.botId,
+    data: d.data,
+  };
+  if (d.trace_id !== undefined) out.trace_id = d.trace_id;
+  return [null, out];
 }
 
 function logLevelForEventType(t: string): LogLevel {

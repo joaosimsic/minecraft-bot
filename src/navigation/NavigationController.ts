@@ -13,6 +13,8 @@ import { Vec3 } from 'vec3';
 import { config } from '../config';
 import { Logger } from '../shared/Logger';
 import { debugLog } from '../shared/debugLog';
+import { getTraceId } from '../shared/traceContext';
+import type { MovementClass } from './world/World';
 
 const REPLAN_BUDGET = 14;
 const TRANSIENT_REPLAN_BUDGET = 6;
@@ -34,6 +36,7 @@ export class NavigationController {
   public constructor(
     private readonly bot: Bot,
     botId: string,
+    companionEmit?: (msg: Record<string, unknown>) => void,
   ) {
     this.validator = new NavigationValidator({
       diagonal: config.env.NAV_DIAGONAL,
@@ -54,9 +57,27 @@ export class NavigationController {
     process.once('beforeExit', (): void => {
       void this.edgeMemory.persistSyncQuiet();
     });
-    this.world = new BotWorld(bot);
     this.log = new Logger('navigation', botId);
-    this.recorder = new NavigationRecorder(this.log);
+    this.world = new BotWorld(bot, {
+      onMovementClassDelta: (d): void => {
+        const payload: Record<string, unknown> = {
+          x: d.x,
+          y: d.y,
+          z: d.z,
+          blockName: d.blockName,
+          movementClassBefore: d.movementClassBefore,
+          movementClassAfter: d.movementClassAfter,
+        };
+        const tid = getTraceId();
+        if (tid !== undefined) payload.trace_id = tid;
+        this.log.event('env_update', payload);
+      },
+    });
+    this.recorder = new NavigationRecorder(
+      this.log,
+      botId,
+      companionEmit === undefined ? null : companionEmit,
+    );
     this.recovery = new Recovery(
       REPLAN_BUDGET,
       TRANSIENT_REPLAN_BUDGET,
@@ -70,6 +91,29 @@ export class NavigationController {
       this.recorder,
     );
     this.executor.setTickSource((): number => this.bot.time.age);
+  }
+
+  public movementGrid16AroundBot(): {
+    anchorX: number;
+    anchorY: number;
+    anchorZ: number;
+    side: number;
+    cells: MovementClass[];
+  } | null {
+    const e = this.bot.entity;
+    if (e === undefined) return null;
+    const fx = Math.floor(e.position.x);
+    const fy = Math.floor(e.position.y);
+    const fz = Math.floor(e.position.z);
+    const side = 16;
+    const half = 8;
+    const cells: MovementClass[] = [];
+    for (let dz = -half; dz < half; dz += 1) {
+      for (let dx = -half; dx < half; dx += 1) {
+        cells.push(this.world.footMovementClass(fx + dx, fy, fz + dz));
+      }
+    }
+    return { anchorX: fx, anchorY: fy, anchorZ: fz, side, cells };
   }
 
   private readonly onPhysicsProbe = (): void => this.probeStuck();

@@ -3,7 +3,7 @@ import type {
   FleetRowSnapshot,
   FocusedStatusSnapshot,
 } from '../core/BotFleet';
-import type { UiStatusPayload } from '../ui/UiEventBus';
+import type { EnvUpdateSnapshot, UiStatusPayload } from '../ui/UiEventBus';
 import type { SinkEvent } from '../shared/Sink';
 
 type Row = {
@@ -56,6 +56,7 @@ function readString(
 export class ReplayState {
   private readonly rows = new Map<string, Row>();
   private focusedId = '';
+  private readonly envLog: EnvUpdateSnapshot[] = [];
 
   private defaultRow(): Row {
     return {
@@ -171,6 +172,38 @@ export class ReplayState {
       r.taskLine = null;
       return;
     }
+
+    if (t === 'env_update') {
+      if (id === undefined) return;
+      if (dr === null) return;
+      const x = readNum(dr, 'x');
+      const y = readNum(dr, 'y');
+      const z = readNum(dr, 'z');
+      const blockName = readString(dr, 'blockName');
+      const mcb = readString(dr, 'movementClassBefore');
+      const mca = readString(dr, 'movementClassAfter');
+      if (x === null || y === null || z === null) return;
+      if (blockName === null || mcb === null || mca === null) return;
+      const entry: EnvUpdateSnapshot = {
+        ts: ev.ts,
+        botId: id,
+        x,
+        y,
+        z,
+        blockName,
+        movementClassBefore: mcb,
+        movementClassAfter: mca,
+      };
+      const topTid = ev.trace_id;
+      if (typeof topTid === 'string' && topTid.length > 0)
+        entry.trace_id = topTid;
+      this.envLog.push(entry);
+      if (this.envLog.length > 500) {
+        const drop = this.envLog.length - 500;
+        this.envLog.splice(0, drop);
+      }
+      return;
+    }
   }
 
   public onlineBotIds(): string[] {
@@ -249,6 +282,9 @@ export class ReplayState {
       }
     }
 
-    return { focused, fleet, focusedId: fid, homeXZ };
+    const envTail =
+      this.envLog.length === 0 ? undefined : this.envLog.slice(-20);
+
+    return { focused, fleet, focusedId: fid, homeXZ, envTail };
   }
 }

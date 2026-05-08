@@ -25,6 +25,14 @@ describe('parseReplayJsonlLine', (): void => {
     });
   });
 
+  test('parses trace_id', (): void => {
+    const line =
+      '{"ts":"t","type":"decision","botId":"b","trace_id":"abc-123","data":{}}';
+    const [e, ev] = parseReplayJsonlLine(line);
+    expect(e).toBeNull();
+    expect(ev?.trace_id).toBe('abc-123');
+  });
+
   test('invalid json', (): void => {
     const [e, ev] = parseReplayJsonlLine('{');
     expect(e).not.toBeNull();
@@ -67,5 +75,32 @@ describe('ReplayState', (): void => {
     expect(p.fleet.length).toBe(1);
     expect(p.fleet[0]!.positionLabel).toContain('10.0');
     expect(p.fleet[0]!.online).toBe(true);
+  });
+
+  test('env_update accumulates envTail', (): void => {
+    const st = new ReplayState();
+    st.applyEvent({
+      ts: 't0',
+      type: 'spawn',
+      botId: 'alice',
+    });
+    st.applyEvent({
+      ts: 't1',
+      type: 'env_update',
+      botId: 'alice',
+      trace_id: 'tid-1',
+      data: {
+        x: 1,
+        y: 2,
+        z: 3,
+        blockName: 'stone',
+        movementClassBefore: 'ground',
+        movementClassAfter: 'water',
+      },
+    });
+    const p = st.toPayload(null);
+    expect(p.envTail?.length).toBe(1);
+    expect(p.envTail![0]!.trace_id).toBe('tid-1');
+    expect(p.envTail![0]!.blockName).toBe('stone');
   });
 });

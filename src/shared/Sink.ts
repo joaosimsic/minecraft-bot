@@ -7,6 +7,7 @@ export interface SinkEvent {
   type: string;
   scope?: string;
   botId?: string;
+  trace_id?: string;
   data?: Record<string, unknown>;
 }
 

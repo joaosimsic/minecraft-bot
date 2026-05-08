@@ -34,6 +34,7 @@ export const botSchema = {
     .int()
     .min(1)
     .default(10),
+  NAV_MAX_EXPANSIONS: z.coerce.number().int().min(100).default(20000),
 
   REPLAY_JSONL: z.string().min(1).optional(),
 

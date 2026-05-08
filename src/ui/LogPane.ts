@@ -96,7 +96,7 @@ export class LogPane {
     this.logBox.removeAllListeners('set content');
 
     this.logBox.on('scroll', (): void => {
-      this.logFollowBottom = this.logBox.getScrollPerc() >= 99;
+      this.logFollowBottom = this.logScrolledToBottom();
     });
 
     this.logBox.key(['escape'], (): void => {
@@ -211,6 +211,15 @@ export class LogPane {
       this.rebuildMultiColumnWidgets(onlineIds);
     }
     this.fillMultiColumnContents(onlineIds);
+  }
+
+  private logScrolledToBottom(): boolean {
+    const perc = this.logBox.getScrollPerc();
+    if (perc >= 95) return true;
+    const inner = this.logBox.height - this.logBox.iheight;
+    const total = this.logBox.getScrollHeight();
+    if (total <= inner) return true;
+    return false;
   }
 
   private formatLogLine(line: UiLogLine): string {

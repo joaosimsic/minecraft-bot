@@ -2,14 +2,23 @@ const MIN_INNER = 8;
 const SPACE_LOOKBACK = 30;
 
 type BoxLike = {
-  width: number;
-  iwidth: number;
+  width: number | string;
+  iwidth: number | string;
   scrollbar?: { ch: string };
 };
 
+export function blessedDimNumber(v: number | string): number {
+  if (typeof v === 'number') return v;
+  const n = Number(v);
+  if (Number.isFinite(n)) return n;
+  return 0;
+}
+
 export function logInnerDisplayWidth(el: BoxLike): number {
   const margin = el.scrollbar !== undefined ? 1 : 0;
-  return Math.max(MIN_INNER, el.width - el.iwidth - margin);
+  const w = blessedDimNumber(el.width);
+  const iw = blessedDimNumber(el.iwidth);
+  return Math.max(MIN_INNER, w - iw - margin);
 }
 
 export function visibleLenOf(s: string): number {

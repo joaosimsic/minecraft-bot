@@ -2,7 +2,11 @@ import blessed from 'blessed';
 import type { FleetRowSnapshot } from '../core/BotFleet';
 import type { UiLogLine, LogLevel } from '../shared/Logger';
 import { LogStore, logLineMatchesDisplayFilters } from './LogStore';
-import { logInnerDisplayWidth, wrapUiLogLine } from './logLineWrap';
+import {
+  blessedDimNumber,
+  logInnerDisplayWidth,
+  wrapUiLogLine,
+} from './logLineWrap';
 import type { ScreenFrame } from './ScreenFrame';
 
 const MULTI_LOG_LINE_CAP = 20;
@@ -236,7 +240,9 @@ export class LogPane {
   private logScrolledToBottom(): boolean {
     const perc = this.logBox.getScrollPerc();
     if (perc >= 95) return true;
-    const inner = this.logBox.height - this.logBox.iheight;
+    const inner =
+      blessedDimNumber(this.logBox.height) -
+      blessedDimNumber(this.logBox.iheight);
     const total = this.logBox.getScrollHeight();
     if (total <= inner) return true;
     return false;

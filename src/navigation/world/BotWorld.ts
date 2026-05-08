@@ -18,13 +18,13 @@ const DOOR_RE = /door/i;
 export class BotWorld implements World {
   private readonly cache = new Map<string, WorldCell>();
   private readonly closedDoorCache = new Map<string, boolean>();
-  private generation = 0;
+  private readonly hostileCache = new Map<string, boolean>();
 
   public constructor(private readonly bot: Bot) {
     const bump = (): void => {
       this.cache.clear();
       this.closedDoorCache.clear();
-      this.generation += 1;
+      this.hostileCache.clear();
     };
 
     bot.on(
@@ -35,10 +35,6 @@ export class BotWorld implements World {
         bump();
       },
     );
-  }
-
-  public get snapshotGeneration(): number {
-    return this.generation;
   }
 
   public cell(x: number, y: number, z: number): WorldCell {
@@ -60,14 +56,22 @@ export class BotWorld implements World {
   }
 
   public hostileOccupiesCell(ix: number, iy: number, iz: number): boolean {
+    const key = BotWorld.posKey(ix, iy, iz);
+    const hit = this.hostileCache.get(key);
+    if (hit !== undefined) return hit;
+
+    let found = false;
     for (const entity of Object.values(this.bot.entities) as Entity[]) {
       if (entity === undefined) continue;
       if (entity.id === this.bot.entity.id) continue;
       if (!BotWorld.isHostileEntity(entity)) continue;
       if (!BotWorld.entityBlocksCell(entity, ix, iy, iz)) continue;
-      return true;
+      found = true;
+      break;
     }
-    return false;
+
+    this.hostileCache.set(key, found);
+    return found;
   }
 
   public hostileOccupiesFootCell(ix: number, iy: number, iz: number): boolean {

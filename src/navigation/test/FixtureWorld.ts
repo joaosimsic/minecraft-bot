@@ -2,7 +2,6 @@ import type { MovementClass, World, WorldCell } from '../world/World';
 import { emptyAirCell, solidGroundCell } from '../world/Collision';
 
 export class FixtureWorld implements World {
-  public snapshotGeneration = 1;
   private readonly cells = new Map<string, WorldCell>();
   public readonly closedDoors = new Set<string>();
   private readonly hostileFeet = new Set<string>();
@@ -77,9 +76,5 @@ export class FixtureWorld implements World {
 
   public closedDoorAt(x: number, y: number, z: number): boolean {
     return this.closedDoors.has(FixtureWorld.k(x, y, z));
-  }
-
-  public bumpSnapshot(): void {
-    this.snapshotGeneration += 1;
   }
 }

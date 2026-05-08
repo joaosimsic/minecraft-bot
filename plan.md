@@ -1,486 +1,380 @@
-# Plan — Fix TUI Freeze During Pathfinding
+# Plan — Fix Remaining TUI Freeze After Phase 1/2/3
 
-## Goal
+## Context
 
-TUI must stay responsive (≤16 ms per render tick) regardless of plan size or
-plan failures. Pathfinding may take longer, but never block the Node event
-loop long enough to drop input or render frames.
+The previous plan implemented three phases:
 
-## Non-Goals
+1. **Phase 1** — Expansion cap (`NAV_MAX_EXPANSIONS=20000`)
+2. **Phase 2** — Binary heap (`OpenHeap`) replacing the linear `pickOpenNode` scan
+3. **Phase 3** — Async yield via `setImmediate` every `NAV_YIELD_EVERY=2000` expansions,
+   with a `snapshot_stale` abort when `world.snapshotGeneration` changes
 
-- Improving navigation success rate or path quality.
-- Refactoring `NavigationController.walkTo` retry / recovery shape.
-- Touching `EdgeMemory` cost model semantics.
-- Replacing `blessed` or LogPane internals (already throttled correctly).
-
-## Project Constraints (apply to every code change in this plan)
-
-From `CLAUDE.md` — these are hard rules, not stylistic preferences:
-
-1. **No `try`/`catch`** anywhere except the absolute outermost boundary —
-   convert library throws to tuple returns immediately.
-2. **No `any` type.** Use `unknown` + narrowing if needed.
-3. **No `else if` / `else`** — use early returns / guard clauses.
-4. **Min indentation** — flatten with early returns.
-5. **Public methods explicitly marked `public`.**
-6. **Explicit return types** on every function and method.
-7. **Go-style errors:** functions that can fail return
-   `Result<T>` / `Promise<[Error|null, T|null]>`, never throw. Check
-   immediately: `if (err) return [err, null];`.
-8. **No comments.** Names carry meaning.
-9. **Vertical spacing** between unrelated logic blocks.
-10. **Run prettier** after edits (`bunx prettier --write <files>`).
-
-Test runner is `bun test`; `package.json` script:
-
-```json
-"test": "bun --env-file=.env.example test"
-```
-
-Tests pull defaults from `.env.example`, so any new env var **must have a
-sensible default in `.env.example`** or the test suite reads `undefined`.
+All three phases are live. The TUI **still freezes**. This plan addresses the
+two remaining root causes discovered in the latest log
+`logs/bot-2026-05-08T12-40-34.log`.
 
 ---
 
-## Symptoms
+## Symptoms (from the latest log)
 
-From `logs/bot-2026-05-08T01-30-33.log` and
-`logs/events-2026-05-08T01-30-33.jsonl` (run with `NAV_TRACE=0`):
+Three A\* searches ran. All three:
+
+- Expanded exactly **4 000 nodes** (2 × `NAV_YIELD_EVERY`)
+- Took **5–9 seconds** of wall-clock time
+- Aborted with `reason: "snapshot_stale"` (never hit the 20 000 expansion budget)
+- No TUI events (position ticks, state ticks) appeared between `search_start`
+  and `search_end` — confirming the **event loop was blocked** for the full
+  duration of each synchronous batch
+
+Timeline for search #1:
 
 ```
-walk request → plan_failed gap:  ~27 s, 2 m 04 s, 2 m 16 s
-search_end fail expanded=76998
-search_end fail expanded=284687
-search_end fail expanded=284395
+12:40:46.277  search_start
+              ── 2000 expansions, ~4s, event loop blocked ──
+              yield #1 (setImmediate) — no blockUpdate yet, snapshot OK
+              ── 2000 more expansions, ~4s, event loop blocked ──
+              yield #2 (setImmediate) — blockUpdate arrived, snapshot stale
+12:40:55.069  search_end  status=aborted  reason=snapshot_stale  expanded=4000
 ```
 
-During each gap:
-
-- No log lines emitted.
-- TUI frozen (no input handled, no redraw).
-- Bot physics / network ticks still arriving but unprocessed.
-
-Goal: walk to `(9, 75, 99.5)` from spawn — no path exists → search exhausts
-entire reachable frontier before returning `no_path`.
+Result: **~8 s freeze**, then the search aborts, `walkTo` returns `false`,
+GuidedMode retries in 5 s, and the cycle repeats forever.
 
 ---
 
 ## Root Causes
 
-Three independent issues compound. Each must be fixed.
+### RC-A — Each synchronous batch (2 000 expansions) blocks the event loop for ~4 s
 
-### RC1 — `pickOpenNode` is O(open) per expansion
+`NAV_YIELD_EVERY=2000` is far too high given the actual per-expansion cost.
+Profiling via the subagent shows **~2 ms per expansion**, dominated by:
 
-`src/navigation/planner/AStar.ts:200-235`
+| Hot-path operation | Calls per expansion | Why it is expensive |
+|-|-|-|
+| `hostileOccupiesCell` | 24–72 | Each call runs `Object.values(bot.entities)` (allocates a fresh array) then **O(E)** iteration over **every entity** on the server. Zero caching. |
+| `Node.key` getter | 30–40 | Computed (not cached): template-literal string, `[...set].sort().join(';')` when doors are present. Called from `offer`, `relaxEdge`, action constructors, telemetry. |
+| `destinationNode` | 8–20 | Allocates `new Vec3` + `new Node` + regex test per call. |
+| `Node.fromKey` | 1 | String parsing: `endsWith`, `slice`, `indexOf`, `split`, 3× `Number`, `new Set`, `new Node`. |
+| `expand` tail sort | 1 | `[...byDest.keys()].sort(compareNodeKey)` — spreads Map keys, sorts, builds second array. |
 
-```ts
-for (const k of open) {
-  const f = fScore.get(k);
-  const g = gScore.get(k);
-  ...
-}
-```
+At 2 ms/expansion, 2 000 expansions = **~4 s** of continuous blocking before
+`setImmediate` gets a chance to fire. The TUI cannot render or process input.
 
-Linear scan over the entire open set on every iteration. Open set grows to
-tens of thousands of keys on failed searches. Total cost ≈ Σ |open_i| for
-i ∈ [0, expanded). For 284 687 expansions with peak open ≈ 30 k → ~10⁹
-comparisons + `Map.get` calls per search. This dominates the 2-minute
-freezes.
+### RC-B — `snapshot_stale` abort makes the search permanently unfulfillable
 
-`compareNodeKey` at the bottom of the picker also does string comparison on
-keys like `"x,y,z|doorA;doorB|m:w"` — dozens of characters each.
+`BotWorld` bumps `snapshotGeneration` on **every** `blockUpdate` event —
+including completely irrelevant ones (grass growing, leaves decaying, water
+flowing, redstone changes). In a normal Minecraft world, at least one
+`blockUpdate` arrives every few seconds. The search:
 
-### RC2 — No node-expansion budget
+1. Yields at expansion 2 000 (first yield) — no `blockUpdate` has arrived yet,
+   snapshot is still valid.
+2. Continues to expansion 4 000 (second yield) — by now a `blockUpdate` has
+   arrived during some earlier event-loop iteration, `snapshotGeneration` has
+   bumped, and the post-yield check aborts the search.
 
-`src/navigation/planner/AStar.ts:93`
+The search can therefore **never expand more than `2 × NAV_YIELD_EVERY` nodes**,
+regardless of the 20 000 budget. The bot retries every 5 s, each attempt aborts
+identically, and the bot is permanently stuck.
 
-```ts
-while (open.size > 0) { ... }
-```
-
-No `NAV_MAX_EXPANSIONS` cap. Unreachable goals expand the whole reachable
-component. `NavigationController.walkTo` already handles `no_path` cleanly
-(`src/navigation/NavigationController.ts:127`), so capping early is safe and
-turns a 3-minute freeze into a sub-second one.
-
-### RC3 — Search is fully synchronous
-
-`AStar.search` returns `Result<PlanResult>`, not `Promise`. The hot loop
-never yields. Even after RC1+RC2 fixes, a healthy 20 k-expansion search is
-still ~50–200 ms of pure compute — long enough to drop a render frame and
-delay input.
-
-`NavigationController.walkTo` is already `async` and `await`s its caller, so
-making `search` async is mechanical.
+The existing executor (`NavigationExecutor`) already validates each planned
+action via `NeighborGenerator.queuedEdgeLegal` before executing it, and
+`Recovery` handles any failures. This means an A\* path computed over
+slightly-stale world data is **safe**: if a block changed mid-search and
+invalidated a planned step, the executor catches it and triggers a replan.
+The `snapshot_stale` abort is therefore both unnecessary and actively harmful.
 
 ---
 
-## Fix Plan
+## Fixes
 
-Three phases. Ship in order; each is independently shippable and each one
-on its own measurably reduces freeze time.
+Three changes, listed from most impactful to least. Each is independently
+shippable, but all three should land together.
 
 ---
 
-### Phase 1 — Cap node expansions (cheapest, biggest immediate win)
+### Fix 1 — Remove the `snapshot_stale` abort from `AStar.search`
 
-**File:** `src/navigation/planner/AStar.ts`
-**Files touched:** also `src/config/schemas/bot.ts`,
-`src/navigation/NavigationController.ts`, `.env.example`.
+This is the **most critical** fix. Without it, the search can never complete.
 
-**Change:**
+#### Files to change
 
-1. Add config:
+**`src/navigation/planner/AStar.ts`** (lines referenced are from the current
+file, read them before editing since line numbers may shift):
+
+1. **Delete `snap0` capture** (current line 66):
 
    ```ts
-   // src/config/schemas/bot.ts
-   NAV_MAX_EXPANSIONS: z.coerce.number().int().min(100).default(20000),
+   const snap0 = world.snapshotGeneration;           // DELETE this line
    ```
 
-   `.env.example`: append `NAV_MAX_EXPANSIONS=20000`.
-
-2. Pass budget into `AStar.search` (new optional arg `maxExpansions`, default
-   `Infinity` so existing callers / tests unaffected).
-
-3. Inside the main loop, before `expanded += 1`:
+2. **Delete the top-of-loop snapshot check** (current lines 121–135):
 
    ```ts
-   if (expanded >= maxExpansions) {
+   // DELETE this entire block (lines 121-135):
+   if (
+     snap0 !== undefined &&
+     world.snapshotGeneration !== undefined &&
+     world.snapshotGeneration !== snap0
+   ) {
      telemetry.searchEnd({
-       status: 'fail',
-       reason: 'expansion_budget',
+       status: 'aborted',
+       reason: 'snapshot_stale',
        expanded,
+       staleSkipped,
        cost: null,
        durationTicks: durationTicks(),
      });
-     return fail(new Error('no_path_budget'));
+     return fail(new Error('world_snapshot_stale'));
    }
    ```
 
-4. `NavigationController` passes
-   `config.env.NAV_MAX_EXPANSIONS` into `AStar.search` and treats both
-   `no_path` and `no_path_budget` identically (both already routed through
-   `plan_failed` → `walk_returned_false`).
-
-**Expected effect:** 284 k-expansion failure → 20 k-expansion failure.
-With current O(n²) picker, a 20 k search is roughly `(20k/284k)² ≈ 0.5%`
-of the work → ~1 s freeze instead of ~135 s. Phase 1 alone removes the
-multi-minute hangs.
-
-**Risk:** A solvable goal that legitimately needs >20 k expansions will now
-fail. Mitigation: budget tunable via env. Default 20 k chosen because:
-
-- Heuristic is admissible (Manhattan + 2× vertical) so optimal-cost
-  searches stay tight.
-- 20 k expansions of 6–8 neighbours each ≈ 120 k–160 k edge checks — far
-  more than any sane single-leg replan in this game (legs typically
-  rebuild every ~50 nodes via Recovery).
-
-**Test plan:**
-
-- Unit: existing AStar tests pass with default cap.
-- Add unit in `tests/navigation/astar.test.ts`: search with
-  `maxExpansions: 5` on an unreachable goal returns `no_path_budget` and
-  `expanded === 5`.
-- Update `.env.example` so the bun test runner picks up the default
-  (otherwise `config.env.NAV_MAX_EXPANSIONS` will be `undefined` in tests).
-- Manual: re-run the failing scenario from `bot-2026-05-08T01-30-33.log`,
-  confirm `plan_failed` arrives in <2 s.
-
-**Caller audit (must update if signature changes):**
-
-```
-src/navigation/NavigationController.ts:116
-tests/navigation/astar.test.ts:17, 48, 68, 76
-tests/navigation/hostile.test.ts:19
-tests/navigation/navigation.test.ts:75
-tests/navigation/neighbor-generator.test.ts:35, 56
-tests/navigation/pathfinding-jumps.test.ts:16
-tests/navigation/validator.test.ts:17, 75
-```
-
-Phase 1 keeps `AStar.search` synchronous (just adds an optional arg
-defaulting to `Infinity`), so call sites do **not** need to change. Only
-`NavigationController` opts into the cap.
-
----
-
-### Phase 2 — Replace open set + linear scan with binary heap
-
-**File:** `src/navigation/planner/AStar.ts` (+ new
-`src/navigation/planner/OpenHeap.ts`).
-
-**Change:**
-
-1. New class `OpenHeap` — min-heap keyed by primitive triple `(f, g, seq)`.
-   - `seq` is monotonic insertion counter; replaces `compareNodeKey`
-     tiebreak. Avoids string comparison entirely on the hot path.
-   - Stores entries `{ key: NodeKey; f: number; g: number; seq: number }`.
-   - Operations: `push(entry)`, `popMin(): Entry | null`, `size: number`.
-   - Lazy deletion: when `gScore.get(entry.key) < entry.g` at pop time,
-     discard the stale entry and pop again.
-   - No decrease-key. Improving `g` for a node = push a new entry; the
-     stale one is filtered on pop.
-
-2. Replace in `AStar.search`:
-
-   - `const open = new Set<NodeKey>();` →
-     `const heap = new OpenHeap();`
-   - Drop `pickOpenNode` entirely.
-   - Loop becomes:
-
-     ```ts
-     while (heap.size > 0) {
-       const entry = heap.popMin();
-       if (entry === null) break;
-       const currentKey = entry.key;
-       if (closed.has(currentKey)) continue;
-
-       const currentG = gScore.get(currentKey);
-       if (currentG === undefined) return fail(new Error('astar_g'));
-       if (entry.g > currentG) continue; // stale
-
-       closed.add(currentKey);
-       ...
-     }
-     ```
-
-   - In `relaxEdge`, after updating `gScore`/`fScore`, push a new entry
-     into the heap instead of `open.add`.
-
-3. Drop `compareNodeKey` import from `AStar.ts` (still used elsewhere; keep
-   the export in `Node.ts`).
-
-**Expected effect:** Replace O(n²) total picking with O(n log n). Expected
-~50–100× speedup on large frontiers. A 284 k-expansion exhaustive search
-should drop from ~135 s to ~1–3 s. With Phase 1 cap of 20 k, well under
-100 ms.
-
-**Risk:**
-
-- Heap correctness bugs on tiebreaks. Mitigated by `seq` counter giving a
-  total order on `(f, g, seq)`.
-- Stale-entry filtering must use `gScore` lookup, not equality with the
-  popped entry, so concurrent improvements during processing are tolerated
-  (they can't happen in synchronous search but the invariant is the right
-  one for Phase 3).
-
-**Test plan:**
-
-- New unit test `tests/navigation/openHeap.test.ts` (project convention is
-  `tests/<area>/<camelCase>.test.ts`, not collocated):
-  - `popMin` order matches sorted-array baseline across random
-    `(f, g, seq)` triples.
-  - `size` accurate after N pushes / M pops.
-  - Stale-on-pop pattern: push `(f=10, g=10, seq=1)`, push
-    `(f=10, g=5, seq=2)`, pop returns the lower-g entry; old entry then
-    pops as stale.
-- AStar regression: existing tests in `tests/navigation/astar.test.ts`,
-  `pathfinding-jumps.test.ts`, `navigation.test.ts`,
-  `neighbor-generator.test.ts`, `validator.test.ts`, `hostile.test.ts`
-  must produce the **same path cost** as before. Path identity may differ
-  (tiebreaks change with seq vs string compare), so assertions on exact
-  action sequences may need relaxing to assertions on cost + endpoints.
-  Audit each before changing.
-- Add a `staleSkipped` counter to `searchEnd` telemetry to monitor heap
-  correctness in production logs (sanity check: on a reachable goal,
-  staleSkipped should be small relative to expanded).
-- Manual: re-run failing scenario, confirm `expanded` counts match Phase 1
-  budget (heap doesn't change which nodes get expanded under the same
-  heuristic and tiebreak ordering modulo seq order, only how fast).
-
----
-
-### Phase 3 — Yield to event loop during search
-
-**File:** `src/navigation/planner/AStar.ts`,
-`src/navigation/NavigationController.ts`.
-
-**Change:**
-
-1. Make `AStar.search` `async` and return `AsyncResult<PlanResult>`.
-
-2. Add config:
+3. **Delete the post-yield snapshot check** (current lines 237–251):
 
    ```ts
-   NAV_YIELD_EVERY: z.coerce.number().int().min(0).default(2000),
+   // DELETE this entire block (lines 237-251):
+   if (
+     snap0 !== undefined &&
+     world.snapshotGeneration !== undefined &&
+     world.snapshotGeneration !== snap0
+   ) {
+     telemetry.searchEnd({
+       status: 'aborted',
+       reason: 'snapshot_stale',
+       expanded,
+       staleSkipped,
+       cost: null,
+       durationTicks: durationTicks(),
+     });
+     return fail(new Error('world_snapshot_stale'));
+   }
    ```
 
-   `0` = never yield (preserve current behavior for tests / replay).
-
-3. Inside the loop, every `NAV_YIELD_EVERY` expansions:
+   After deletion, the yield block (lines 235–252) should become just:
 
    ```ts
    if (yieldEvery > 0 && expanded % yieldEvery === 0) {
-     await new Promise<void>((resolve): void => {
-       setImmediate((): void => resolve());
-     });
-     // re-check snapshot after yielding
-     if (snap0 !== world.snapshotGeneration) {
-       telemetry.searchEnd({
-         status: 'aborted',
-         reason: 'snapshot_stale',
-         expanded,
-         cost: null,
-         durationTicks: durationTicks(),
-       });
-       return fail(new Error('world_snapshot_stale'));
-     }
+     await yieldToEventLoop();
    }
    ```
 
-   The post-yield snapshot recheck is critical: `BotWorld` invalidates its
-   cache on `blockUpdate` and bumps `snapshotGeneration`. If a block
-   changed during the yield, the partial search is no longer valid and
-   `walkTo` will replan from a fresh start.
+**`src/navigation/world/World.ts`** (line 16):
 
-4. `NavigationController.ts:116` — `await` the search:
+Remove `snapshotGeneration` from the `World` interface:
 
-   ```ts
-   const planOp = await AStar.search(...);
-   ```
+```ts
+readonly snapshotGeneration?: number;   // DELETE this line
+```
 
-5. Add `AsyncResult` import in `AStar.ts` from `../../shared/result`.
+The interface should become:
 
-6. Update **all** sync call sites — Phase 3 makes the signature
-   `Promise<Result<PlanResult>>`:
+```ts
+export interface World {
+  cell(x: number, y: number, z: number): WorldCell;
+  closedDoorAt(x: number, y: number, z: number): boolean;
+  footMovementClass(x: number, y: number, z: number): MovementClass;
+  hostileOccupiesCell(ix: number, iy: number, iz: number): boolean;
+  hostileOccupiesFootCell(x: number, y: number, z: number): boolean;
+}
+```
 
-   ```
-   src/navigation/NavigationController.ts:116    add `await`
-   tests/navigation/astar.test.ts:17, 48, 68, 76
-   tests/navigation/hostile.test.ts:19
-   tests/navigation/navigation.test.ts:75
-   tests/navigation/neighbor-generator.test.ts:35, 56
-   tests/navigation/pathfinding-jumps.test.ts:16
-   tests/navigation/validator.test.ts:17, 75
-   ```
+**`src/navigation/world/BotWorld.ts`**:
 
-   Each test `it(...)` body that calls `AStar.search` must become `async`
-   and `await` the result. Bun test supports `async` bodies natively.
+- Remove the `generation` field (line 21): `private generation = 0;`
+- Remove the `generation += 1;` line inside the `bump` closure (line 27)
+- Remove the `snapshotGeneration` getter (lines 40–42)
+- Keep the cache-clearing in `bump()` — that is still needed so subsequent
+  `cell()` lookups after a yield return fresh data
 
-7. Replay-mode determinism gate. `src/main.ts:208` reads
-   `config.env.REPLAY_JSONL`. Pass an effective yield budget into
-   `NavigationController` (or read inside `walkTo`):
+After the change, the `bump` closure should be just:
 
-   ```ts
-   const yieldEvery =
-     config.env.REPLAY_JSONL !== undefined ? 0 : config.env.NAV_YIELD_EVERY;
-   ```
+```ts
+const bump = (): void => {
+  this.cache.clear();
+  this.closedDoorCache.clear();
+};
+```
 
-   `0` disables yields → loop is functionally synchronous → replay
-   ordering matches recording.
+**`src/navigation/test/FixtureWorld.ts`**:
 
-8. `NeighborGenerator.queuedEdgeLegal` calls `NeighborGenerator.expand`
-   directly, **not** `AStar.search`. Untouched — confirm by leaving
-   `expand` synchronous.
+- Remove `public snapshotGeneration = 1;` (line 5)
+- Remove `public bumpSnapshot(): void { ... }` (lines 82–84)
 
-**Expected effect:** Even under pathological searches, TUI redraws every
-~16 ms (one tick of the event loop ≈ a few ms with yield interval 2000).
-Input handling (Ctrl-C, command entry) responsive throughout.
+**`tests/navigation/astar.test.ts`**:
 
-**Risk:**
+- Delete the entire `describe('AStar staleness', ...)` block that tests
+  `snapshot_stale` (lines 90–125). Specifically the test
+  `'abort when snapshot bumps mid-search'`.
+- Keep the `'repeated search same optimal cost'` test (lines 127–152),
+  but move it outside the deleted describe block (it has nothing to do with
+  staleness). Place it inside the main `describe('AStar', ...)` block.
 
-- Mid-search world mutation. Mitigated by post-yield snapshot recheck —
-  same invariant the existing pre-yield code relies on.
-- Multiple concurrent `walkTo` calls on the same controller. Already
-  serialized by the `draining` flag and the `await` chain in
-  `NavigationController.walkTo`. Confirm by grep: only one in-flight call
-  per bot.
-- Replay determinism. `setImmediate` ordering is non-deterministic across
-  runs. Set `NAV_YIELD_EVERY=0` in replay mode (replay env reads from
-  `REPLAY_JSONL`, gate via that).
+After the change, `astar.test.ts` should have these tests:
 
-**Test plan:**
-
-- Unit: existing AStar tests pass with `NAV_YIELD_EVERY=0`.
-- Unit: new test runs `AStar.search` with yield enabled and a fake
-  `setImmediate`, asserts loop yields the expected number of times.
-- Manual: spam guided commands while a long search is running; TUI input
-  must respond <100 ms; Ctrl-C must kill the bot promptly.
-- Manual: trigger a `blockUpdate` mid-search (place a block via a second
-  client) and confirm `snapshot_stale` abort fires and `walkTo` retries.
+1. `'finds straight corridor'` (existing)
+2. `'expansion budget returns no_path_budget with exact expanded count'` (existing)
+3. `'yieldEvery invokes yieldImpl on unreachable search with budget'` (existing)
+4. `'repeated search same optimal cost'` (moved from staleness describe)
 
 ---
 
-## Config Surface (final state)
+### Fix 2 — Lower `NAV_YIELD_EVERY` from 2 000 to 256
 
-`src/config/schemas/bot.ts`:
+At ~2 ms/expansion, 256 expansions ≈ 500 ms per synchronous batch. Combined
+with Fix 1 (no more aborts), the search will actually complete, and freezes
+drop from ~4 s to ~500 ms.
+
+Further reduction (e.g. 64) would give ~128 ms batches but adds more
+context-switch overhead. 256 is a good starting point; the perf fix in Fix 3
+will make this even better.
+
+#### Files to change
+
+**`src/config/schemas/bot.ts`** (line 38):
 
 ```ts
-NAV_MAX_EXPANSIONS: z.coerce.number().int().min(100).default(20000),
-NAV_YIELD_EVERY:    z.coerce.number().int().min(0).default(2000),
+// BEFORE:
+NAV_YIELD_EVERY: z.coerce.number().int().min(0).default(2000),
+
+// AFTER:
+NAV_YIELD_EVERY: z.coerce.number().int().min(0).default(256),
 ```
 
-`.env.example` additions:
+**`.env.example`** (line 31):
 
 ```
-NAV_MAX_EXPANSIONS=20000
+# BEFORE:
 NAV_YIELD_EVERY=2000
+
+# AFTER:
+NAV_YIELD_EVERY=256
 ```
+
+---
+
+### Fix 3 — Cache `hostileOccupiesCell` results in `BotWorld`
+
+This is the dominant per-expansion cost. Each call iterates all entities via
+`Object.values(bot.entities)` — allocating a fresh array — then scans every one.
+With 24–72 calls per expansion, this is the main reason each expansion takes
+~2 ms. Caching the result per `(x,y,z)` cell within a synchronous batch
+(cleared on `blockUpdate` just like the block cache) collapses the entity
+iteration to at most once per unique cell coordinate.
+
+#### Files to change
+
+**`src/navigation/world/BotWorld.ts`**:
+
+Add a hostile-entity cache alongside the existing block/door caches:
+
+```ts
+private readonly hostileCache = new Map<string, boolean>();
+```
+
+Clear it in the `bump` closure alongside the other caches:
+
+```ts
+const bump = (): void => {
+  this.cache.clear();
+  this.closedDoorCache.clear();
+  this.hostileCache.clear();
+};
+```
+
+Rewrite `hostileOccupiesCell` to check the cache first:
+
+```ts
+public hostileOccupiesCell(ix: number, iy: number, iz: number): boolean {
+  const key = BotWorld.posKey(ix, iy, iz);
+  const hit = this.hostileCache.get(key);
+  if (hit !== undefined) return hit;
+
+  let found = false;
+  for (const entity of Object.values(this.bot.entities) as Entity[]) {
+    if (entity === undefined) continue;
+    if (entity.id === this.bot.entity.id) continue;
+    if (!BotWorld.isHostileEntity(entity)) continue;
+    if (!BotWorld.entityBlocksCell(entity, ix, iy, iz)) continue;
+    found = true;
+    break;
+  }
+
+  this.hostileCache.set(key, found);
+  return found;
+}
+```
+
+Note: this follows the project's "no early return inside loop" style while
+still breaking out early when found. The early `break` avoids iterating the
+rest of the entities once a hostile is found. The assignment + break pattern
+avoids a bare `return true` inside the for loop which would skip the cache
+write.
+
+#### Expected effect
+
+The cache hit rate will be very high because `canStandAt` checks cells
+`(x, y, z)` and `(x, y+1, z)`, and adjacent expansions share many cell
+coordinates. The 24–72 entity scans per expansion drop to ~1–3 cache misses
+(unique cell lookups) per expansion, each doing a single entity iteration.
+
+This should bring per-expansion cost from ~2 ms down to ~0.2–0.5 ms, making
+the 256-expansion yield interval produce ~50–130 ms batches (smooth TUI).
+
+---
+
+## Caller/Test Audit
+
+No callers of `AStar.search` need to change signatures — the `searchOpts`
+parameter shape is unchanged. The only test change is removing the
+`snapshot_stale` test and moving the `'repeated search same optimal cost'` test.
+
+Full list of `AStar.search` call sites (verify each still works after changes):
+
+| File | Line(s) | Change needed |
+|-|-|-|
+| `src/navigation/NavigationController.ts` | 116 | None — `world_snapshot_stale` was handled the same as `no_path`, so removing it is transparent |
+| `tests/navigation/astar.test.ts` | 16, 42, 66, 112, 132, 140 | Delete lines 90–125 (snapshot test), move lines 127–152 up |
+| `tests/navigation/hostile.test.ts` | 19 | None |
+| `tests/navigation/navigation.test.ts` | 75 | None |
+| `tests/navigation/neighbor-generator.test.ts` | 35, 56 | None |
+| `tests/navigation/pathfinding-jumps.test.ts` | 16 | None |
+| `tests/navigation/validator.test.ts` | 17, 75 | None |
 
 ---
 
 ## Verification
 
-After all three phases land, re-run the original failing case (guided
-walk to `(9, 75, 99.5)` from spawn with no reachable path):
+After all three fixes, run:
 
-1. **Bot log** — `plan_failed` arrives in <2 s, repeatedly. No multi-minute
-   gaps.
-2. **Event log** — every `search_end` shows `expanded ≤ 20000` with
-   `reason: "expansion_budget"`.
-3. **TUI** — type into the command box during the search; characters
-   appear within one frame. Ctrl-C exits within 100 ms.
-4. **Telemetry** — `summary` `walk.nav.fail` counter still increments
-   (semantics preserved), and a new aggregate of search durations should
-   show p99 well under 1 s.
-5. **Tests** — `bun test` green across all files in `tests/navigation/`.
-6. **Replay** — `REPLAY_JSONL=...` against a previously recorded session
-   reproduces identical action sequences (yield disabled in this mode).
-7. **Heap sanity** — `staleSkipped / expanded` ratio in `search_end`
-   events stays below ~0.5 on reachable goals.
+```bash
+bun --env-file=.env.example test
+bunx prettier --write src/navigation/planner/AStar.ts src/navigation/world/World.ts src/navigation/world/BotWorld.ts src/navigation/test/FixtureWorld.ts src/config/schemas/bot.ts tests/navigation/astar.test.ts .env.example
+bun --env-file=.env.example test
+```
 
----
+Then, when testing manually against the Minecraft server:
 
-## Rollout Order
-
-1. **Phase 1** alone, ship and observe in a real session. Hitches should
-   drop from minutes to ~1 s. Lowest-risk change.
-2. **Phase 2** on top — hitches drop to <100 ms even at the cap.
-3. **Phase 3** on top — hitches functionally invisible; TUI smooth under
-   any plan size or any future pathological case.
-
-If Phase 1 alone proves sufficient for current usage, Phases 2 and 3 may
-be deferred but should still ship since the underlying complexity bug
-(RC1) and event-loop-blocking pattern (RC3) are latent foot-guns for
-larger maps and longer plans.
+1. Bot log should show `plan_failed expansion_budget` or `plan_failed no_path`
+   (never `plan_failed world_snapshot_stale`)
+2. TUI should remain responsive during searches (characters typed appear
+   promptly, Ctrl-C exits within 100 ms)
+3. `search_end` events should show `expanded` up to 20 000, not capped at
+   `2 × NAV_YIELD_EVERY`
 
 ---
 
-## Hand-Off Checklist (for the implementing agent)
+## Project Constraints Checklist (from `CLAUDE.md`)
 
-Before marking each phase done, confirm:
+Every code change in this plan must satisfy:
 
-- [ ] All file paths in this plan still exist and line numbers still match
-      (grep before editing — codebase may have moved).
-- [ ] `bun test` is green.
-- [ ] `bunx prettier --write` run on every touched file.
-- [ ] `bunx tsc --noEmit` (or whatever the type-check script is) clean.
-- [ ] No `try`/`catch`, no `any`, no `else`/`else if`, no comments,
-      explicit `public`, explicit return types, Go-style error tuples
-      respected — these are non-negotiable per `CLAUDE.md`.
-- [ ] `.env.example` updated for any new env var.
-- [ ] Phase shipped as its own commit / PR — do **not** bundle phases.
-- [ ] Manual repro of the freeze scenario captured in fresh logs and
-      diffed against `logs/bot-2026-05-08T01-30-33.log` for the report.
-
-## Out-of-Scope Follow-Ups (track separately, do not bundle)
-
-- Heuristic upgrade (e.g. octile distance with diagonal flag, water-aware
-  cost). Phase 2 makes overhead per node lower, encouraging this.
-- Anytime / iterative-deepening A*. Lets long searches return a partial
-  best-effort path. Real value only after Phase 3 unblocks the loop.
-- Persistent open set across replans within the same goal. Big win when
-  Recovery triggers many small replans, but unrelated to the freeze.
-- Worker-thread planner. Cleaner than yielding but heavier change; only
-  worth it if Phase 3 yield granularity proves insufficient.
+- No `try`/`catch`
+- No `any` type
+- No `else if` / `else` — use early returns / guard clauses
+- Minimum indentation
+- `public` keyword explicit on non-private methods
+- Explicit return types on all functions/methods
+- Go-style error tuples (`[Error | null, T | null]`)
+- No comments
+- Vertical spacing between unrelated logic blocks
+- Run `bunx prettier --write` on every touched file
+- Run `bun --env-file=.env.example test` after changes

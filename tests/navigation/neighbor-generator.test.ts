@@ -27,12 +27,12 @@ describe('NeighborGenerator', () => {
     expect(kinds.has('interact')).toBe(true);
   });
 
-  test('queuedEdgeLegal accepts planned walk while geometry unchanged', () => {
+  test('queuedEdgeLegal accepts planned walk while geometry unchanged', async () => {
     const w = new FixtureWorld();
     w.platformXZ(64, 0, 0, 5, 0);
 
     const mem = new EdgeMemory();
-    const plan = AStar.search(
+    const plan = await AStar.search(
       w,
       new Node(0, 65, 0),
       new Node(2, 65, 0),
@@ -48,12 +48,12 @@ describe('NeighborGenerator', () => {
     expect(q[0]).toBeNull();
   });
 
-  test('queuedEdgeLegal rejects stale walk after floor removed', () => {
+  test('queuedEdgeLegal rejects stale walk after floor removed', async () => {
     const w = new FixtureWorld();
     w.platformXZ(64, 0, 0, 5, 0);
 
     const mem = new EdgeMemory();
-    const plan = AStar.search(
+    const plan = await AStar.search(
       w,
       new Node(0, 65, 0),
       new Node(2, 65, 0),

@@ -113,7 +113,7 @@ export class NavigationController {
       const expandOpts = config.env.NAV_DIAGONAL
         ? { diagonal: true }
         : undefined;
-      const planOp = AStar.search(
+      const planOp = await AStar.search(
         this.world,
         startNode,
         goalNode,
@@ -123,6 +123,13 @@ export class NavigationController {
         this.recorder.aStarHooks(),
         (): number => this.bot.time.age,
         expandOpts,
+        {
+          maxExpansions: config.env.NAV_MAX_EXPANSIONS,
+          yieldEvery:
+            config.env.REPLAY_JSONL !== undefined
+              ? 0
+              : config.env.NAV_YIELD_EVERY,
+        },
       );
       if (planOp[0] !== null) {
         this.log.warn('plan_failed', planOp[0].message);

@@ -7,13 +7,13 @@ import { emptyAirCell } from '../../src/navigation/world/Collision';
 import { THIN_FLOOR } from './helpers';
 
 describe('Pathfinding jumps', () => {
-  test('uses jump_up with thin-floor step geometry', () => {
+  test('uses jump_up with thin-floor step geometry', async () => {
     const w = new FixtureWorld();
     w.platformXZ(64, 0, 0, 1, 0);
     w.putCell(1, 65, 0, THIN_FLOOR);
     w.putCell(1, 66, 0, emptyAirCell());
 
-    const r = AStar.search(
+    const r = await AStar.search(
       w,
 
       new Node(0, 65, 0),

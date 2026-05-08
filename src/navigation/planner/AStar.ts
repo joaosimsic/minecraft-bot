@@ -1,6 +1,6 @@
-import type { Result } from '../../shared/result';
+import type { AsyncResult, Result } from '../../shared/result';
 import { fail, ok } from '../../shared/result';
-import { compareNodeKey, Node, type NodeKey } from './Node';
+import { Node, type NodeKey } from './Node';
 import { Heuristic } from './Heuristic';
 import {
   NeighborGenerator,
@@ -11,6 +11,7 @@ import type { NavigationAction } from '../movement/Actions';
 import type { World } from '../world/World';
 import type { EdgeMemory } from '../recovery/EdgeMemory';
 import { Collision } from '../world/Collision';
+import { OpenHeap } from './OpenHeap';
 
 export type PlanResult = {
   path: NavigationAction[];
@@ -27,6 +28,12 @@ export type AStarTelemetry = {
   candidateRejected: (data: Record<string, unknown>) => void;
 };
 
+export type AStarSearchOptions = {
+  maxExpansions?: number;
+  yieldEvery?: number;
+  yieldImpl?: () => Promise<void>;
+};
+
 const noopTelemetry: AStarTelemetry = {
   searchStart: (): void => {},
   searchEnd: (): void => {},
@@ -39,7 +46,7 @@ const noopTelemetry: AStarTelemetry = {
 type CameFrom = { parent: NodeKey; via: NavigationAction };
 
 export class AStar {
-  public static search(
+  public static async search(
     world: World,
     start: Node,
     goal: Node,
@@ -49,13 +56,13 @@ export class AStar {
     telemetry: AStarTelemetry = noopTelemetry,
     tickNow?: () => number,
     expandOpts?: ExpandOpts,
-  ): Result<PlanResult> {
+    searchOpts?: AStarSearchOptions,
+  ): AsyncResult<PlanResult> {
     if (!Collision.canStandAt(world, start))
       return fail(new Error('start_not_standable'));
     if (!Collision.canStandAt(world, goal))
       return fail(new Error('goal_not_standable'));
 
-    const snap0 = world.snapshotGeneration;
     const tickStart = tickNow !== undefined ? tickNow() : gameTick;
     const durationTicks = (): number => {
       const tickEnd = tickNow !== undefined ? tickNow() : gameTick;
@@ -63,6 +70,10 @@ export class AStar {
       if (d < 0) return 0;
       return d;
     };
+
+    const maxExpansions = searchOpts?.maxExpansions ?? Infinity;
+    const yieldEvery = searchOpts?.yieldEvery ?? 0;
+    const yieldImpl = searchOpts?.yieldImpl;
 
     telemetry.searchStart({
       start: start.key,
@@ -80,48 +91,63 @@ export class AStar {
     const gScore = new Map<NodeKey, number>();
     const fScore = new Map<NodeKey, number>();
     const cameFrom = new Map<NodeKey, CameFrom>();
-    const open = new Set<NodeKey>();
+    const heap = new OpenHeap();
     const closed = new Set<NodeKey>();
+    let heapSeq = 0;
+    const nextHeapSeq = (): number => {
+      heapSeq += 1;
+      return heapSeq;
+    };
 
     gScore.set(start.key, 0);
     const startF = Heuristic.estimate(start, goal);
     fScore.set(start.key, startF);
-    open.add(start.key);
+    heap.push({ key: start.key, f: startF, g: 0, seq: nextHeapSeq() });
 
     let expanded = 0;
+    let staleSkipped = 0;
 
-    while (open.size > 0) {
-      if (
-        snap0 !== undefined &&
-        world.snapshotGeneration !== undefined &&
-        world.snapshotGeneration !== snap0
-      ) {
+    const yieldToEventLoop = (): Promise<void> => {
+      if (yieldImpl !== undefined) return yieldImpl();
+      return new Promise<void>((resolve): void => {
+        setImmediate((): void => {
+          resolve();
+        });
+      });
+    };
+
+    while (heap.size > 0) {
+      if (expanded >= maxExpansions) {
         telemetry.searchEnd({
-          status: 'aborted',
-          reason: 'snapshot_stale',
+          status: 'fail',
+          reason: 'expansion_budget',
           expanded,
+          staleSkipped,
           cost: null,
           durationTicks: durationTicks(),
         });
-        return fail(new Error('world_snapshot_stale'));
+        return fail(new Error('no_path_budget'));
       }
 
-      const currentKeyOp = AStar.pickOpenNode(open, fScore, gScore);
-      if (currentKeyOp[0] !== null) return [currentKeyOp[0], null];
-      const currentKey = currentKeyOp[1];
-      if (currentKey === null) break;
+      const entry = heap.popMin();
+      if (entry === null) break;
 
-      open.delete(currentKey);
+      const currentKey = entry.key;
       if (closed.has(currentKey)) continue;
+
+      const currentG = gScore.get(currentKey);
+      if (currentG === undefined) return fail(new Error('astar_g'));
+      if (entry.g > currentG) {
+        staleSkipped += 1;
+        continue;
+      }
+
       closed.add(currentKey);
 
       const currentNodeOp = Node.fromKey(currentKey);
       if (currentNodeOp[0] !== null) return [currentNodeOp[0], null];
       const currentNode = currentNodeOp[1];
       if (currentNode === null) return fail(new Error('astar_node'));
-
-      const currentG = gScore.get(currentKey);
-      if (currentG === undefined) return fail(new Error('astar_g'));
 
       expanded += 1;
       const currentF = fScore.get(currentKey);
@@ -143,6 +169,7 @@ export class AStar {
         telemetry.searchEnd({
           status: 'ok',
           expanded,
+          staleSkipped,
           cost: currentG,
           durationTicks: durationTicks(),
         });
@@ -177,7 +204,8 @@ export class AStar {
           cameFrom,
           fScore,
           gScore,
-          open,
+          heap,
+          nextHeapSeq,
           closed,
           goal,
           gameTick,
@@ -186,52 +214,20 @@ export class AStar {
           n,
         );
       }
+
+      if (yieldEvery > 0 && expanded % yieldEvery === 0) {
+        await yieldToEventLoop();
+      }
     }
 
     telemetry.searchEnd({
       status: 'fail',
       expanded,
+      staleSkipped,
       cost: null,
       durationTicks: durationTicks(),
     });
     return fail(new Error('no_path'));
-  }
-
-  private static pickOpenNode(
-    open: Set<NodeKey>,
-    fScore: Map<NodeKey, number>,
-    gScore: Map<NodeKey, number>,
-  ): Result<NodeKey | null> {
-    if (open.size === 0) return ok(null);
-    let bestKey: NodeKey | null = null;
-    let bestF = Infinity;
-    let bestG = Infinity;
-    for (const k of open) {
-      const f = fScore.get(k);
-      if (f === undefined) return fail(new Error('open_missing_f'));
-      const g = gScore.get(k);
-      if (g === undefined) return fail(new Error('open_missing_g'));
-      if (f > bestF) continue;
-      if (f < bestF) {
-        bestKey = k;
-        bestF = f;
-        bestG = g;
-        continue;
-      }
-      if (g > bestG) continue;
-      if (g < bestG) {
-        bestKey = k;
-        bestG = g;
-        continue;
-      }
-      if (bestKey === null) {
-        bestKey = k;
-        continue;
-      }
-      if (compareNodeKey(k, bestKey) >= 0) continue;
-      bestKey = k;
-    }
-    return ok(bestKey);
   }
 
   private static relaxEdge(
@@ -239,7 +235,8 @@ export class AStar {
     cameFrom: Map<NodeKey, CameFrom>,
     fScore: Map<NodeKey, number>,
     gScore: Map<NodeKey, number>,
-    open: Set<NodeKey>,
+    heap: OpenHeap,
+    nextHeapSeq: () => number,
     closed: Set<NodeKey>,
     goal: Node,
     gameTick: number,
@@ -264,8 +261,9 @@ export class AStar {
     cameFrom.set(nk, { parent: fromKey, via: neighbor.action });
     gScore.set(nk, tentativeG);
     const h = Heuristic.estimate(neighbor.to, goal);
-    fScore.set(nk, tentativeG + h);
-    open.add(nk);
+    const f = tentativeG + h;
+    fScore.set(nk, f);
+    heap.push({ key: nk, f, g: tentativeG, seq: nextHeapSeq() });
   }
 
   private static reconstruct(

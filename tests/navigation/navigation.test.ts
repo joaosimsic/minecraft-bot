@@ -68,11 +68,11 @@ function buildComplexHouseWorld(): FixtureWorld {
 }
 
 describe('AStar complex house integration', () => {
-  test('navigates yard, double doors, and interior staircase to loft', () => {
+  test('navigates yard, double doors, and interior staircase to loft', async () => {
     const w = buildComplexHouseWorld();
     const start = new Node(6, 65, 11);
     const goal = new Node(5, 67, 6);
-    const result = AStar.search(
+    const result = await AStar.search(
       w,
       start,
       goal,

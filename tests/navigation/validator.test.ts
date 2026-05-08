@@ -9,12 +9,12 @@ import { emptyAirCell } from '../../src/navigation/world/Collision';
 import { mockBot } from './helpers';
 
 describe('NavigationValidator', () => {
-  test('preAction rejects foot mismatch', () => {
+  test('preAction rejects foot mismatch', async () => {
     const w = new FixtureWorld();
     w.platformXZ(64, 0, 0, 3, 0);
 
     const mem = new EdgeMemory();
-    const plan = AStar.search(
+    const plan = await AStar.search(
       w,
       new Node(0, 65, 0),
       new Node(2, 65, 0),
@@ -67,12 +67,12 @@ describe('NavigationValidator', () => {
 });
 
 describe('Post velocity', () => {
-  test('reject when horizontal speed exceeds Beta 1.7.3 caps', () => {
+  test('reject when horizontal speed exceeds Beta 1.7.3 caps', async () => {
     const w = new FixtureWorld();
     w.platformXZ(64, 0, 0, 3, 0);
 
     const mem = new EdgeMemory();
-    const plan = AStar.search(
+    const plan = await AStar.search(
       w,
       new Node(0, 65, 0),
       new Node(1, 65, 0),

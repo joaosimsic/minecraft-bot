@@ -10,13 +10,13 @@ import { EdgeMemory } from '../../src/navigation/recovery/EdgeMemory';
 import { FixtureWorld } from '../../src/navigation/test/FixtureWorld';
 
 describe('Hostile footprint', () => {
-  test('makes narrow strip unreachable', () => {
+  test('makes narrow strip unreachable', async () => {
     const w = new FixtureWorld();
     w.platformXZ(64, 0, 0, 5, 0);
     w.addHostileFoot(2, 65, 0);
 
     const mem = new EdgeMemory();
-    const r = AStar.search(
+    const r = await AStar.search(
       w,
       new Node(0, 65, 0),
       new Node(5, 65, 0),

@@ -1,162 +1,367 @@
-# Observability & Diagnostics Roadmap
+# A* Reproducible World Dumps — Implementation Plan
 
-This document outlines a multi-stage plan to evolve the bot from its current trace-correlated JSONL + optional OTLP trace export model toward a professional-grade telemetry and post-mortem debugging stack.
+## Feature Overview
 
-## Current State vs Future State
+When A* pathfinding fails (e.g., "goal unreachable"), we cannot determine whether the failure stems from a legitimate obstacle, a heuristic bug, or a world desync (the bot's cached world state diverging from reality). This feature captures the bot's exact mental model—its block cache—at the moment of failure and persists it to JSON. An offline test environment can then load this dump, instantiate an identical world state, and replay the A* search deterministically to reproduce the failure and debug root causes.
 
-| Area              | Current State                                                                                                                                              | Future State                                                                                                                                                                                            |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Correlation**   | `trace_id` via `AsyncLocalStorage` (`traceContext.ts`); attached on JSONL sink rows and navigation telemetry                                               | Same correlation id propagated into OTLP metrics, failure snapshots, and replay scrubber state                                                                                                          |
-| **Metrics**       | `Metrics` (`Metrics.ts`) holds in-process counters, position trail, and rolling counter samples for short windows; exposed through kernel/status, not OTLP | Counters and derived rates (blocks/min, distance/min) exported as **OTLP/HTTP (JSON)** metrics on a schedule, same `TELEMETRY_ENDPOINT` convention as traces (typical local collector on port **4318**) |
-| **Traces**        | `debugLog` posts OTLP JSON traces to `{TELEMETRY_ENDPOINT}/v1/traces` (Jaeger-compatible)                                                                  | Traces remain; metrics use `/v1/metrics` (or configured sibling path) under the same base URL convention                                                                                                |
-| **Failures**      | `movement_fail` JSONL events carry `MovementFailPayload` (`reason`, `observed`, `phase`, etc.)                                                             | Same events plus a structured 3×3×3 block snapshot around the failure anchor for “why” context                                                                                                          |
-| **Web Companion** | 16×16 worldview grid, logs, fleet status, path overlays where applicable                                                                                   | Failure snapshot viewer, replay transport controls, A\* expansion heatmap overlay                                                                                                                       |
-| **Replay**        | `pumpReplayFile` reads entire JSONL into memory and replays linearly into `UiEventBus` + `ReplayState`                                                     | **Index-on-load** (`timestamp → byte_offset`) then O(1) seek; transport controls; grid synced to replay clock                                                                                           |
+**Success Criteria:**
+- Dumps are written to `logs/repro-<runId>.json` whenever `AStar.search()` returns failure.
+- Dumps contain complete block state: coordinates, block names, collision properties, water state, doors, and hostile mobs.
+- Offline test harness can reconstruct the world and re-run A* with identical inputs.
+- Test output clearly indicates search success/failure and provides path length or failure reason.
 
 ---
 
-## Data Flow (Target Architecture)
+## Phase 1: Implement the World Dumper
 
-High-level flow from runtime through sinks to the Web Companion after the initiatives below.
+### Target: `src/navigation/world/BotWorld.ts`
 
-```mermaid
-flowchart LR
-  subgraph Kernel["BotKernel / navigation"]
-    M[Metrics]
-    NE[NavigationExecutor]
-    AS[AStar]
-    BW[BotWorld cache]
-    M --> MR["OTLP/HTTP JSON\nresource attrs"]
-    NE --> FS[Failure snapshots]
-    BW --> FS
-    AS --> HM["Heatmap\nper trace_id"]
-  end
-  subgraph Sink["Sink / Logger / Recorder"]
-    J[JSONL file]
-    TL[debugLog OTLP traces JSON]
-    MR --> OM["POST /v1/metrics JSON"]
-    FS --> J
-    HM --> J
-    NE --> J
-  end
-  subgraph Replay["Replay index-on-load"]
-    SCAN[streaming scan]
-    IDX["map: ts → byte_offset"]
-    SCAN --> IDX
-  end
-  subgraph Web["WebCompanion"]
-    WG[world_grid + overlays]
-    RP[Replay controller]
-    IDX --> RP
-    J -.->|seek by offset| RP
-    RP --> WG
-    FS -.->|compact 27-cell payload| WG
-    HM -.->|current trace only| WG
-  end
-  TL[(Collector / Jaeger)]
-  OM[(OTLP metrics backend)]
-  J --> TL
+**Objective:** Add an `exportWorldDump()` method that serializes the bot's cached world state to a portable JSON structure.
+
+### Implementation Details
+
+#### Method Signature
+```typescript
+public exportWorldDump(): WorldDumpData {
+  // Serialize this.cache to a structured JSON object
+}
+```
+
+#### Return Type Definition
+```typescript
+interface WorldDumpData {
+  metadata: {
+    timestamp: number; // ISO 8601 or Unix ms
+    runId: string;
+    botPosition: { x: number; y: number; z: number };
+    goalPosition?: { x: number; y: number; z: number };
+  };
+  cells: Record<string, CellDumpData>;
+}
+
+interface CellDumpData {
+  name: string;
+  blocksBody: boolean;
+  topSupportStand: boolean;
+  isMc: boolean; // minecraft:air vs other
+  isWater: boolean;
+  isWaterFoot: boolean;
+  isDoor: boolean;
+  isHostile: boolean;
+  meta?: { doorState?: "open" | "closed"; hostileType?: string };
+}
+```
+
+### Algorithm
+1. Iterate over all entries in `this.cache` (assumed to be a Map or object keyed by coordinate string).
+2. For each cached block, extract all relevant properties from the block object.
+3. Normalize coordinate keys to a consistent format (e.g., `"x:y:z"`) for reconstruction.
+4. Include bot position and (if available) the goal position that was being searched for.
+5. Return the structured `WorldDumpData` object (JSON-serializable).
+
+### Code Structure
+```typescript
+public exportWorldDump(): WorldDumpData {
+  const cells: Record<string, CellDumpData> = {};
+
+  for (const [key, block] of this.cache) {
+    cells[key] = {
+      name: block.name,
+      blocksBody: block.blocksBody ?? false,
+      topSupportStand: block.topSupportStand ?? false,
+      isMc: block.isMc ?? false,
+      isWater: block.isWater ?? false,
+      isWaterFoot: block.isWaterFoot ?? false,
+      isDoor: block.isDoor ?? false,
+      isHostile: block.isHostile ?? false,
+      meta: this.extractMetadata(block),
+    };
+  }
+
+  return {
+    metadata: {
+      timestamp: Date.now(),
+      runId: process.env.RUN_ID || "unknown",
+      botPosition: { x: this.bot.entity.position.x, y: this.bot.entity.position.y, z: this.bot.entity.position.z },
+      goalPosition: this.lastGoal || undefined,
+    },
+    cells,
+  };
+}
+
+private extractMetadata(block: any): Record<string, any> {
+  const meta: Record<string, any> = {};
+  if (block.isDoor) {
+    meta.doorState = block.isOpen ? "open" : "closed";
+  }
+  if (block.isHostile) {
+    meta.hostileType = block.mobType || "generic";
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined;
+}
 ```
 
 ---
 
-## Initiative 1: Time-Series Metrics Export (OTLP Metrics)
+## Phase 2: Triggering Dumps on Failure
 
-**Goal:** Move beyond local counters and ad-hoc snapshots to historical trend analysis in standard observability backends.
+### Target: `src/navigation/NavigationController.ts`
 
-**Tasks**
+**Objective:** Integrate dump triggering into the `walkTo` method so that every pathfinding failure automatically captures the world state.
 
-- Extend `Metrics` (or a thin `MetricsExporter` collaborator used from `BotKernel` / `Telemetry`) to aggregate gauge and counter-style signals and emit **OTLP/HTTP with JSON encoding** (same wire style as existing trace export) to `{TELEMETRY_ENDPOINT}/v1/metrics`, keeping alignment with typical OTLP HTTP collectors on port **4318** alongside Jaeger-style trace ingestion.
-- Define stable metric names and data-point attributes (e.g. `mode`) for “efficiency” signals: blocks dug per minute, horizontal distance per minute, derived from existing counters and `windowCounterDelta` / position trail where appropriate.
-- Wire periodic export (respecting rate limits) when `TELEMETRY_ENDPOINT` is set; keep behavior unchanged when unset.
+### Implementation Details
 
-**Technical Success Criteria**
+#### Dependencies
+- Require Node's `fs` module at the top of `NavigationController.ts`.
+- Ensure logs directory exists or create it during bot initialization.
 
-- With `TELEMETRY_ENDPOINT` configured, a collector can scrape or receive metrics and graphs show non-zero series during active mining / movement without manual code changes to dashboards.
-- Metric export failures do not break the bot process (errors follow existing tuple / non-throwing patterns used elsewhere).
-- Documented mapping from in-process `Metrics` keys to exported OTLP metric names appears in README or config comments only if the team already documents env vars there; otherwise keep env schema aligned in `bot.ts` schema.
+#### Modify `walkTo` Method
+When `AStar.search()` returns a failure (null or error result), immediately:
 
-### Implementation Notes / Technical Guardrails
+1. Call `this.world.exportWorldDump()` to get the serialized state.
+2. Generate a unique filename: `repro-<runId>-<timestamp>.json`.
+3. Write the dump to `logs/` using `fs.writeFileSync`.
+4. Include the filename in the existing debugLog telemetry payload.
 
-- **Encoding:** All metric exports use **OTLP/HTTP (JSON)** only (no protobuf on the wire for this codebase path), matching the existing `debugLog` trace pipeline so operators can reuse the same collector base URL and JSON-oriented tooling.
-- **Resource attributes:** Every `ResourceMetrics` (or equivalent) payload must include **`service.name`** (aligned with `TELEMETRY_SERVICE_NAME` / existing trace resource) and **`bot_id`** as **resource** attributes so Grafana and other backends can aggregate and split multi-bot fleets without overloading per-series attribute cardinality.
+#### Code Structure
+```typescript
+import fs from "fs";
+import path from "path";
 
----
+public async walkTo(goal: Vec3): Promise<[Error | null, boolean]> {
+  // ... setup code ...
 
-## Initiative 2: Rich Failure Context (“Why” Snapshots)
+  const [searchErr, path] = AStar.search(start, goal, this.world, heuristic);
 
-**Goal:** At the instant of a navigation or movement validation failure, capture enough world context to explain _why_ the executor disagreed with the plan.
+  if (searchErr || !path) {
+    // Dump world state on failure
+    const dump = this.world.exportWorldDump();
+    const timestamp = Date.now();
+    const runId = process.env.RUN_ID || "unknown";
+    const dumpFilename = `repro-${runId}-${timestamp}.json`;
+    const dumpPath = path.join(process.cwd(), "logs", dumpFilename);
 
-**Tasks**
+    // Ensure logs directory exists
+    fs.mkdirSync(path.dirname(dumpPath), { recursive: true });
 
-- On `NavigationExecutor` failure paths (including reasons such as `post_foot_mismatch` and related validator outcomes), sample a 3×3×3 block volume centered on the relevant foot / action anchor by **reading only from the existing `BotWorld` (or equivalent) in-memory cache** already maintained for navigation—no new synchronous Mineflayer/world queries on the failure path.
-- Extend `movement_fail` emission (`NAV_EVENT.MOVEMENT_FAIL`, `MovementFailPayload` in `Events.ts`) so JSONL rows include a compact, versioned snapshot object (see guardrails below) suitable for storage and UI.
-- Update the Web Companion to parse and render “Failure Snapshots” (e.g. layered mini-grid or modal) tied to the selected log line or latest failure for the active bot.
+    fs.writeFileSync(dumpPath, JSON.stringify(dump, null, 2), "utf-8");
 
-**Technical Success Criteria**
+    // Include in telemetry
+    this.debugLog({
+      event: "pathfinding_failure",
+      reason: searchErr?.message || "no_path",
+      dumpFile: dumpFilename,
+      goal,
+      startPos: start,
+    });
 
-- Every emitted `movement_fail` for instrumented failure reasons includes a snapshot when world data is available; size bounded and schema stable across a minor version.
-- Replay of a JSONL file containing snapshots reproduces the same UI representation as live mode.
-- Snapshots do not add noticeable tick-time stalls (sampling batched or pulled from already-synced world caches).
+    return [searchErr || new Error("Goal unreachable"), false];
+  }
 
-### Implementation Notes / Technical Guardrails
+  // ... continue with successful path execution ...
+  return [null, true];
+}
+```
 
-- **Performance:** The 27-cell sample must be assembled exclusively from data already present in the navigation world cache (`BotWorld`); if a cell is not yet cached, record `unknown` / omit in the compact encoding rather than blocking the main loop on a fresh query.
-- **Serialization:** Prefer a **palette table + indices** (27 small integers) or a **bit-packed / bitmask-oriented** layout where movement classes or block families allow it, plus a schema version field—goal is minimal JSONL growth versus 27 full block name strings per failure.
+#### Telemetry Update
+Ensure the debugLog payload includes:
+- `dumpFile: string` — the filename written to disk
+- `reason: string` — the specific failure reason (if available)
+- `goal: Vec3` — the target position
+- `startPos: Vec3` — the starting position
 
----
-
-## Initiative 3: Interactive Replay Dashboard
-
-**Goal:** Enable time-travel debugging: scrub through a session after the fact with the worldview aligned to what the bot “saw.”
-
-**Tasks**
-
-- Replace or augment `pumpReplayFile` so replay is not strictly one-shot full-file: implement **index-on-load**—a single streaming pass builds a **`timestamp → byte_offset`** map (and optionally line numbers) without holding the full file contents in RAM; seeking uses `fs.createReadStream` + `stream` seek or partial reads from stored offsets, then re-applies events from a checkpoint (may require `ReplayState` snapshot / reset semantics).
-- Add a Replay Controller in the Web Companion: play, pause, rewind, fast-forward, and scrubber bound to replay timeline.
-- Drive `world_grid` (and path overlays) from the replay cursor timestamp so grid state matches the event stream at that instant.
-
-**Technical Success Criteria**
-
-- Scrubbing backward then forward produces consistent `ReplayState` and grid visuals for the same timestamp.
-- Large JSONL files remain usable (no full-file duplicate in memory where avoidable, or documented memory tradeoff).
-- Existing `REPLAY_JSONL` entry path in `main.ts` continues to work for simple “play through once” until the UI requires seek (backward compatible).
-
-### Implementation Notes / Technical Guardrails
-
-- **Memory:** Use **index-on-load**: first pass scans the file sequentially, parses only enough of each line to extract a monotonic `ts` (or sort key) and records the **starting byte offset** of that line; the index is bounded by line count, not file size in bytes beyond the map structure.
-- **Seeking:** Jumping to a timestamp is **O(1) map lookup** to an offset, then bounded forward read + JSON parse for events from that cursor—not reloading a multi-gigabyte string into memory (contrast with today’s full `readFile` + `split('\n')` pattern in `pumpReplayFile.ts`).
-
----
-
-## Initiative 4: Pathfinding Heatmaps & Heuristic Analysis
-
-**Goal:** Visualize A\* search effort in real time, not only the final path, and highlight pathological search regions.
-
-**Tasks**
-
-- During search, record expanded nodes (building on `NAV_EVENT.NODE_EXPAND` / `Recorder` telemetry) into a bounded spatial structure suitable for the 16×16 companion (aggregate per-cell expansion count for the **active** `trace_id` only).
-- Overlay expansion counts on the Web Companion worldview (color or alpha heatmap) **scoped strictly to the current `trace_id`** so prior walks do not clutter the overlay.
-- Emit a diagnostic when a **heuristic trap** is detected: if **(expanded node count) / max(1, Manhattan distance from search start to goal)** **>** **X**, fire once per search (or throttled); default **X = 50**. Surface via JSONL and/or low-rate `debugLog` with `expanded`, `manhattan`, `X`, and `runId` / `trace_id`.
-
-**Technical Success Criteria**
-
-- For a single `search_start` … `search_end` cycle, the UI can show both final path and expansion heatmap without leaking unbounded memory across ticks.
-- Heuristic-trap signals correlate with known bad cases (tight caves, headroom failures) in manual test scenarios.
-- Heatmap data path reuses existing telemetry / status channels where possible to avoid duplicate A\* instrumentation.
-
-### Implementation Notes / Technical Guardrails
-
-- **Heuristic trap definition:** Use the ratio **expansions / Manhattan(start, goal)** with **default threshold X = 50**; tune X via config if needed. Document that Manhattan uses the same coordinate convention as the planner’s goal specification.
-- **Visualization bounds:** The heatmap buffer and UI overlay must **clear or ignore expansions from any prior `trace_id`** when a new walk starts; only the current correlated walk’s cells are painted.
+This allows correlating telemetry events with dump files for later analysis.
 
 ---
 
-## Suggested Phasing
+## Phase 3: The Offline Reproduction Test
 
-1. **Phase A — Export:** Initiative 1 (metrics) + minimal README / env documentation for metrics path.
-2. **Phase B — Context:** Initiative 2 (failure snapshots) + Web Companion read path.
-3. **Phase C — Replay UX:** Initiative 3 (seekable replay + controller).
-4. **Phase D — Planner insight:** Initiative 4 (heatmaps + heuristic traps).
+### Target: Create `tests/navigation/repro.test.ts`
 
-Dependencies: Initiative 2 benefits from stable JSONL schema patterns established in 1; Initiative 3 can reuse snapshot and trace metadata from 2 for richer scrub labels; Initiative 4 is largely parallel but shares Web Companion overlay plumbing with 2 and 3.
+**Objective:** Build a Bun test harness that loads a world dump JSON, reconstructs the exact world state, and replays the A* search for debugging.
+
+### Implementation Details
+
+#### Test Structure
+```typescript
+import { describe, it, expect } from "bun:test";
+import fs from "fs";
+import path from "path";
+import { FixtureWorld } from "./fixtures/FixtureWorld";
+import { AStar } from "../../src/navigation/planner/AStar";
+import type { WorldDumpData } from "../../src/navigation/world/BotWorld";
+
+describe("A* Reproducible World Dumps", () => {
+  it("should reproduce world state and search from dump", () => {
+    // 1. Load the dump file
+    const dumpPath = process.argv[2] || "logs/repro-latest.json";
+    const dumpText = fs.readFileSync(dumpPath, "utf-8");
+    const dump: WorldDumpData = JSON.parse(dumpText);
+
+    // 2. Instantiate a FixtureWorld (mock world for testing)
+    const fixtureWorld = new FixtureWorld();
+
+    // 3. Populate the fixture world from the dump
+    for (const [key, cellData] of Object.entries(dump.cells)) {
+      const [x, y, z] = key.split(":").map(Number);
+
+      fixtureWorld.putCell(x, y, z, {
+        name: cellData.name,
+        blocksBody: cellData.blocksBody,
+        topSupportStand: cellData.topSupportStand,
+        isMc: cellData.isMc,
+        isWater: cellData.isWater,
+        isWaterFoot: cellData.isWaterFoot,
+        isDoor: cellData.isDoor,
+        isHostile: cellData.isHostile,
+      });
+
+      // Mark water feet if needed
+      if (cellData.isWaterFoot) {
+        fixtureWorld.markWaterFoot(x, y, z);
+      }
+
+      // Mark doors with state
+      if (cellData.isDoor && cellData.meta?.doorState) {
+        fixtureWorld.markDoor(x, y, z, cellData.meta.doorState === "open");
+      }
+
+      // Mark hostiles
+      if (cellData.isHostile) {
+        fixtureWorld.markHostile(x, y, z, cellData.meta?.hostileType || "generic");
+      }
+    }
+
+    // 4. Extract start and goal from metadata
+    const start = dump.metadata.botPosition;
+    const goal = dump.metadata.goalPosition;
+
+    if (!goal) {
+      console.warn("No goal position in dump; skipping search");
+      return;
+    }
+
+    // 5. Run A* search
+    const [searchErr, pathResult] = AStar.search(
+      { x: Math.floor(start.x), y: Math.floor(start.y), z: Math.floor(start.z) },
+      { x: Math.floor(goal.x), y: Math.floor(goal.y), z: Math.floor(goal.z) },
+      fixtureWorld,
+      (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) // Euclidean heuristic
+    );
+
+    // 6. Log results
+    if (searchErr) {
+      console.error(`Search failed: ${searchErr.message}`);
+      console.error(`Dump: ${dumpPath}`);
+      expect(searchErr).toBeNull(); // Test will fail and print dump info
+    } else if (pathResult) {
+      console.log(`✓ Path found: ${pathResult.length} steps`);
+      console.log(`  Start: (${start.x}, ${start.y}, ${start.z})`);
+      console.log(`  Goal: (${goal.x}, ${goal.y}, ${goal.z})`);
+      expect(pathResult.length).toBeGreaterThan(0);
+    } else {
+      console.warn("No path exists (goal unreachable)");
+      expect(pathResult).toBeDefined();
+    }
+  });
+});
+```
+
+### FixtureWorld Class Design
+
+Create `tests/navigation/fixtures/FixtureWorld.ts` to mirror `BotWorld.ts`:
+
+```typescript
+export class FixtureWorld {
+  private cache: Map<string, BlockData> = new Map();
+
+  public putCell(x: number, y: number, z: number, blockData: BlockData): void {
+    const key = `${x}:${y}:${z}`;
+    this.cache.set(key, blockData);
+  }
+
+  public markWaterFoot(x: number, y: number, z: number): void {
+    const key = `${x}:${y}:${z}`;
+    const block = this.cache.get(key);
+    if (block) {
+      block.isWaterFoot = true;
+    }
+  }
+
+  public markDoor(x: number, y: number, z: number, isOpen: boolean): void {
+    const key = `${x}:${y}:${z}`;
+    const block = this.cache.get(key);
+    if (block) {
+      block.isDoor = true;
+      block.isOpen = isOpen;
+    }
+  }
+
+  public markHostile(x: number, y: number, z: number, type: string): void {
+    const key = `${x}:${y}:${z}`;
+    const block = this.cache.get(key);
+    if (block) {
+      block.isHostile = true;
+      block.mobType = type;
+    }
+  }
+
+  // Implement BotWorld's public interface for A* compatibility
+  public getBlockStateAt(x: number, y: number, z: number): BlockData | null {
+    const key = `${x}:${y}:${z}`;
+    return this.cache.get(key) || null;
+  }
+
+  public blocksBody(x: number, y: number, z: number): boolean {
+    return this.getBlockStateAt(x, y, z)?.blocksBody ?? false;
+  }
+
+  public canWalkOnTop(x: number, y: number, z: number): boolean {
+    return this.getBlockStateAt(x, y, z)?.topSupportStand ?? false;
+  }
+
+  // ... other methods as required by A* heuristic ...
+}
+```
+
+### Running the Test
+
+**Command:**
+```bash
+bun test tests/navigation/repro.test.ts -- logs/repro-<runId>-<timestamp>.json
+```
+
+**Expected Output (Success):**
+```
+✓ Path found: 42 steps
+  Start: (100, 64, 200)
+  Goal: (150, 64, 250)
+```
+
+**Expected Output (Failure):**
+```
+Search failed: Heuristic returned Infinity (hostile mob blocking path)
+Dump: logs/repro-local-1620000000000.json
+```
+
+---
+
+## Integration Checklist
+
+- [ ] Add `exportWorldDump()` to `BotWorld.ts` with complete serialization logic
+- [ ] Update `NavigationController.walkTo()` to catch failures and write dumps
+- [ ] Create `FixtureWorld` class and populate from JSON structure
+- [ ] Implement `repro.test.ts` with command-line dump file argument
+- [ ] Ensure `logs/` directory is created during bot startup
+- [ ] Add dump filename to telemetry payload for traceability
+- [ ] Test with a real navigation failure to validate dump completeness
+- [ ] Document the process in a developer guide (optional Phase 4)
+
+---
+
+## Notes
+
+- **Performance:** `exportWorldDump()` is only called on failure, so overhead is negligible.
+- **Storage:** Dumps can be large (~1 MB per 100,000 blocks). Consider rotating old dumps.
+- **Determinism:** The FixtureWorld must exactly mirror the dump; any deviation will produce misleading results.
+- **Heuristic Consistency:** Ensure the offline test uses the same heuristic function as the real A* instance.

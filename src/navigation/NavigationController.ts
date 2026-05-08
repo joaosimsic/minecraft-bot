@@ -16,6 +16,8 @@ import { Logger } from '../shared/Logger';
 import { debugLog } from '../shared/debugLog';
 import { getTraceId } from '../shared/traceContext';
 import type { MovementClass } from './world/World';
+import fs from 'fs';
+import path from 'path';
 
 const REPLAN_BUDGET = 14;
 const TRANSIENT_REPLAN_BUDGET = 6;
@@ -357,6 +359,7 @@ export class NavigationController {
       );
       this.runSeq += 1;
       const runId = `nav-${Date.now()}-${this.runSeq}`;
+      this.world.setGoal({ x: gx, y: gy, z: gz });
       const expandOpts = config.env.NAV_DIAGONAL
         ? { diagonal: true }
         : undefined;
@@ -381,6 +384,7 @@ export class NavigationController {
         },
       );
       if (planOp[0] !== null) {
+        await NavigationController.dumpWorldOnFailure(this.world, runId);
         debugLog(
           'NavigationController.ts:walkTo:planFailed',
           'astar_failed',
@@ -563,5 +567,32 @@ export class NavigationController {
     }
     this.lastProgressKey = k;
     this.stuckTicks = 0;
+  }
+
+  private static async dumpWorldOnFailure(
+    world: BotWorld,
+    runId: string,
+  ): Promise<void> {
+    try {
+      const dump = world.exportWorldDump();
+      const timestamp = Date.now();
+      const dumpFilename = `repro-${runId}-${timestamp}.json`;
+      const logsDir = path.join(process.cwd(), 'logs');
+      const dumpPath = path.join(logsDir, dumpFilename);
+
+      await fs.promises.mkdir(logsDir, { recursive: true });
+      await fs.promises.writeFile(
+        dumpPath,
+        JSON.stringify(dump, null, 2),
+        'utf-8',
+      );
+    } catch (err) {
+      debugLog(
+        'NavigationController.ts:dumpWorldOnFailure',
+        'dump_write_failed',
+        { error: err instanceof Error ? err.message : String(err) },
+        'H1',
+      );
+    }
   }
 }

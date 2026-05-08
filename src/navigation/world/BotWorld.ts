@@ -15,6 +15,29 @@ interface BlockWithProps extends Block {
 type BlockProps = { half?: string; open?: string | boolean };
 
 const DOOR_RE = /door/i;
+const STAIR_RE = /stairs?/i;
+
+export interface CellDumpData {
+  name: string;
+  blocksBody: boolean;
+  topSupportStand: boolean;
+  isMc: boolean;
+  isWater: boolean;
+  isWaterFoot: boolean;
+  isDoor: boolean;
+  isHostile: boolean;
+  meta?: Record<string, unknown>;
+}
+
+export interface WorldDumpData {
+  metadata: {
+    timestamp: number;
+    runId: string;
+    botPosition: { x: number; y: number; z: number };
+    goalPosition?: { x: number; y: number; z: number };
+  };
+  cells: Record<string, CellDumpData>;
+}
 
 export type EnvMovementDelta = {
   x: number;
@@ -35,6 +58,7 @@ export class BotWorld implements World {
   private readonly footMcCache = new Map<string, MovementClass>();
   private readonly closedDoorCache = new Map<string, boolean>();
   private readonly hostileCache = new Map<string, boolean>();
+  private lastGoal?: { x: number; y: number; z: number };
 
   public constructor(
     private readonly bot: Bot,
@@ -272,6 +296,48 @@ export class BotWorld implements World {
     return v;
   }
 
+  public setGoal(goal: { x: number; y: number; z: number }): void {
+    this.lastGoal = goal;
+  }
+
+  public exportWorldDump(): WorldDumpData {
+    const cells: Record<string, CellDumpData> = {};
+
+    for (const [key, cell] of this.cache.entries()) {
+      const blockName = this.blockNameCache.get(key) ?? 'unknown';
+      const isClosed = this.closedDoorCache.get(key) ?? false;
+      const isHostile = this.hostileCache.get(key) ?? false;
+
+      const isWater = /water|lava|flowing_/.test(blockName);
+      const isWaterFoot = this.footMcCache.get(key) === 'water';
+
+      cells[key] = {
+        name: blockName,
+        blocksBody: cell.blocksBody,
+        topSupportStand: cell.topSupportStand,
+        isMc: blockName !== 'air',
+        isWater,
+        isWaterFoot,
+        isDoor: isClosed || /door/i.test(blockName),
+        isHostile,
+      };
+    }
+
+    return {
+      metadata: {
+        timestamp: Date.now(),
+        runId: process.env.RUN_ID || 'unknown',
+        botPosition: {
+          x: this.bot.entity.position.x,
+          y: this.bot.entity.position.y,
+          z: this.bot.entity.position.z,
+        },
+        goalPosition: this.lastGoal,
+      },
+      cells,
+    };
+  }
+
   private static chebyshev(
     ax: number,
     ay: number,
@@ -368,6 +434,9 @@ export class BotWorld implements World {
       const open = p?.open === 'true' || p?.open === true;
       if (open) return emptyAirCell();
       return { blocksBody: true, topSupportStand: false };
+    }
+    if (STAIR_RE.test(block.name)) {
+      return solidGroundCell();
     }
     if (block.diggable === false && block.name !== 'air') {
       return solidGroundCell();

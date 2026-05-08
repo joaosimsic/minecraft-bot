@@ -31,6 +31,8 @@ export type BotWorldEnvOpts = {
 
 export class BotWorld implements World {
   private readonly cache = new Map<string, WorldCell>();
+  private readonly blockNameCache = new Map<string, string>();
+  private readonly footMcCache = new Map<string, MovementClass>();
   private readonly closedDoorCache = new Map<string, boolean>();
   private readonly hostileCache = new Map<string, boolean>();
 
@@ -39,9 +41,7 @@ export class BotWorld implements World {
     private readonly envOpts?: BotWorldEnvOpts,
   ) {
     const bump = (): void => {
-      this.cache.clear();
-      this.closedDoorCache.clear();
-      this.hostileCache.clear();
+      this.clearSpatialCaches();
     };
 
     bot.on('blockUpdate', (oldBlock: Block | null, newBlock: Block | null) => {
@@ -119,15 +119,74 @@ export class BotWorld implements World {
     });
   }
 
+  private clearSpatialCaches(): void {
+    this.cache.clear();
+    this.blockNameCache.clear();
+    this.footMcCache.clear();
+    this.closedDoorCache.clear();
+    this.hostileCache.clear();
+  }
+
   public cell(x: number, y: number, z: number): WorldCell {
     const key = BotWorld.posKey(x, y, z);
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit;
 
     const b = this.bot.blockAt(new Vec3(x, y, z));
+    const nm = b === null ? 'air' : b.name;
+    this.blockNameCache.set(key, nm);
     const c = BotWorld.classifyBlock(b);
     this.cache.set(key, c);
     return c;
+  }
+
+  public buildFailureSnapshotV1(
+    footX: number,
+    footY: number,
+    footZ: number,
+  ): Record<string, unknown> {
+    const palette: string[] = [];
+    const palMap = new Map<string, number>();
+    const indexFor = (token: string): number => {
+      const h = palMap.get(token);
+      if (h !== undefined) return h;
+      palette.push(token);
+      const i = palette.length - 1;
+      palMap.set(token, i);
+      return i;
+    };
+    const idx: number[] = [];
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dz = -1; dz <= 1; dz += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const x = footX + dx;
+          const y = footY + dy;
+          const z = footZ + dz;
+          const key = BotWorld.posKey(x, y, z);
+          const cell = this.cache.get(key);
+          if (cell === undefined) {
+            idx.push(indexFor('u'));
+            continue;
+          }
+          const nm = this.blockNameCache.get(key) ?? '?';
+          const mcRaw = this.footMcCache.get(key);
+          const mc = mcRaw === undefined ? '?' : mcRaw;
+          const b0 = cell.blocksBody ? 1 : 0;
+          const t0 = cell.topSupportStand ? 1 : 0;
+          const token = `C${b0}${t0}|${nm}|${mc}`;
+          idx.push(indexFor(token));
+        }
+      }
+    }
+    return {
+      v: 1,
+      ax: footX,
+      ay: footY,
+      az: footZ,
+      order: 'y,z,x',
+      palette,
+      i: idx,
+    };
   }
 
   private footMcLogCount = 0;
@@ -156,6 +215,8 @@ export class BotWorld implements World {
         'H9',
       );
     }
+    const key = BotWorld.posKey(x, y, z);
+    this.footMcCache.set(key, r);
     return r;
   }
 

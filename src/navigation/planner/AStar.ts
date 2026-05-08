@@ -35,6 +35,7 @@ export type AStarSearchOptions = {
   heuristicWeight?: number;
   yieldEvery?: number;
   yieldImpl?: () => Promise<void>;
+  heuristicTrapThreshold?: number;
 };
 
 const noopTelemetry: AStarTelemetry = {
@@ -78,6 +79,21 @@ export class AStar {
     const hWeight = searchOpts?.heuristicWeight ?? 1;
     const yieldEvery = searchOpts?.yieldEvery ?? 0;
     const yieldImpl = searchOpts?.yieldImpl;
+    const heuristicTrapThreshold = searchOpts?.heuristicTrapThreshold ?? 50;
+
+    const trapExtras = (expandedCount: number): Record<string, unknown> => {
+      const manhattan =
+        Math.abs(start.x - goal.x) +
+        Math.abs(start.y - goal.y) +
+        Math.abs(start.z - goal.z);
+      const ratio = expandedCount / Math.max(1, manhattan);
+      return {
+        runId,
+        manhattan,
+        heuristic_ratio: ratio,
+        heuristic_trap: ratio > heuristicTrapThreshold,
+      };
+    };
 
     telemetry.searchStart({
       start: start.key,
@@ -126,7 +142,6 @@ export class AStar {
 
     while (heap.size > 0) {
       if (expanded >= maxExpansions) {
-        // #region agent log
         const _terrainProbe: Record<string, unknown>[] = [];
         for (let _dz = -2; _dz <= 5; _dz++) {
           for (let _dy = -3; _dy <= 3; _dy++) {
@@ -171,11 +186,9 @@ export class AStar {
           },
           'H12',
         );
-        // #endregion
         if (bestPartialKey !== null && bestPartialKey !== start.key) {
           const partialG = gScore.get(bestPartialKey) ?? 0;
           const pathOp = AStar.reconstruct(cameFrom, start.key, bestPartialKey);
-          // #region agent log
           debugLog(
             'AStar.ts:partialExtract',
             'reconstruct result',
@@ -187,7 +200,6 @@ export class AStar {
             },
             'H12',
           );
-          // #endregion
           if (pathOp[0] === null && pathOp[1] !== null) {
             telemetry.searchEnd({
               status: 'partial',
@@ -196,6 +208,7 @@ export class AStar {
               staleSkipped,
               cost: partialG,
               durationTicks: durationTicks(),
+              ...trapExtras(expanded),
             });
             return ok({
               path: pathOp[1],
@@ -213,6 +226,7 @@ export class AStar {
           staleSkipped,
           cost: null,
           durationTicks: durationTicks(),
+          ...trapExtras(expanded),
         });
         return fail(new Error('no_path_budget'));
       }
@@ -266,6 +280,7 @@ export class AStar {
           staleSkipped,
           cost: currentG,
           durationTicks: durationTicks(),
+          ...trapExtras(expanded),
         });
         return ok({
           path,
@@ -326,6 +341,7 @@ export class AStar {
       staleSkipped,
       cost: null,
       durationTicks: durationTicks(),
+      ...trapExtras(expanded),
     });
     return fail(new Error('no_path'));
   }

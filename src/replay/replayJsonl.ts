@@ -18,7 +18,7 @@ const BLESS_LEVEL: Record<LogLevel, string> = {
   debug: 'gray-fg',
 };
 
-function jsonParseLine(raw: string): [Error | null, unknown | null] {
+export function jsonParseLine(raw: string): [Error | null, unknown | null] {
   try {
     return [null, JSON.parse(raw)];
   } catch (e) {

@@ -58,7 +58,11 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
 <div class="panel" style="margin-top:12px">
 <h2>worldview (movement class)</h2>
 <canvas id="worldCanvas" width="256" height="256"></canvas>
-<div class="legend">green=ground blue=water · magenta=path · red=rejected</div>
+<div class="legend">green=ground blue=water · magenta=path · red=rejected · orange=search heat</div>
+<div id="replayPanel" style="display:none;margin-top:10px;font-size:12px">
+<label>replay scrub <input type="range" id="replayScrub" style="width:220px;vertical-align:middle"/> <button type="button" id="replaySeekBtn">seek to time</button></label>
+</div>
+<div id="failSnap" style="display:none;font-size:11px;margin-top:8px;color:#8b949e;white-space:pre-wrap;word-break:break-word"></div>
 <div id="envList"></div>
 </div>
 <div class="panel" style="margin-top:12px">
@@ -77,6 +81,9 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
   let gridState = { ax: 0, ay: 0, az: 0, side: 16, cells: [] };
   let pathCells = [];
   let rejectCells = [];
+
+  let heatCells = [];
+  let heatTrace = '';
 
   function parseNodeXZ(key) {
     if (!key) return null;
@@ -110,6 +117,19 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
         ctx.fillRect(gx * cw, gz * ch, cw + 0.5, ch + 0.5);
       }
     }
+    ctx.fillStyle = 'rgba(255, 140, 0, 0.35)';
+    for (const h of heatCells) {
+      const hx = h && typeof h.x === 'number' ? h.x : null;
+      const hz = h && typeof h.z === 'number' ? h.z : null;
+      const hn = h && typeof h.n === 'number' ? h.n : 0;
+      if (hx === null || hz === null) continue;
+      const g = toGridXZ(hx, hz);
+      if (!g) continue;
+      const a = Math.min(0.65, 0.12 + Math.log1p(hn) * 0.07);
+      ctx.fillStyle = 'rgba(255, 140, 0, ' + String(a) + ')';
+      if (g.gx < 0 || g.gz < 0 || g.gx >= side || g.gz >= side) continue;
+      ctx.fillRect(g.gx * cw, g.gz * ch, cw + 0.5, ch + 0.5);
+    }
     ctx.fillStyle = 'rgba(219, 97, 162, 0.55)';
     for (const p of pathCells) {
       if (p.gx < 0 || p.gz < 0 || p.gx >= side || p.gz >= side) continue;
@@ -122,12 +142,62 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
     }
   }
 
+  function applyNavHeatmapClear(msg) {
+    if (!msg || msg.type !== 'nav_heatmap_clear') return;
+    heatCells = [];
+    if (msg.trace_id) heatTrace = String(msg.trace_id);
+    drawWorld();
+  }
+
+  function applyNavHeatmap(msg) {
+    if (!msg || msg.type !== 'nav_heatmap') return;
+    if (msg.trace_id && heatTrace && String(msg.trace_id) !== heatTrace) return;
+    heatCells = Array.isArray(msg.cells) ? msg.cells : [];
+    drawWorld();
+  }
+
+  function applyMovementFail(msg) {
+    if (!msg || msg.type !== 'movement_fail') return;
+    const el = document.getElementById('failSnap');
+    if (!el) return;
+    const pl = msg.payload || {};
+    const snap = pl.world_snapshot;
+    if (!snap) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'block';
+    el.textContent = 'failure snapshot v' + String(snap.v) + ' @' + snap.ax + ',' + snap.ay + ',' + snap.az + ' palette=' + JSON.stringify(snap.palette) + ' i=' + JSON.stringify(snap.i);
+  }
+
+  function applyReplayReady(msg) {
+    if (!msg || msg.type !== 'replay_ready') return;
+    const panel = document.getElementById('replayPanel');
+    const scrub = document.getElementById('replayScrub');
+    if (!panel || !scrub) return;
+    panel.style.display = 'block';
+    scrub.min = String(msg.minTs || 0);
+    scrub.max = String(msg.maxTs || 0);
+    scrub.value = String(msg.maxTs || 0);
+  }
+
+  function wireReplaySeek(socket) {
+    const btn = document.getElementById('replaySeekBtn');
+    if (!btn || !socket) return;
+    btn.addEventListener('click', function () {
+      const scrub = document.getElementById('replayScrub');
+      const v = scrub ? Number(scrub.value) : 0;
+      socket.send(JSON.stringify({ type: 'replay_seek', tsMs: v }));
+    });
+  }
+
   function applyNavTrace(msg) {
     if (!msg || msg.type !== 'nav_trace') return;
     const nk = msg.navKind;
     const data = msg.data || {};
     if (nk === 'path_selected') {
       rejectCells = [];
+      heatCells = [];
       const actions = data.actions;
       pathCells = [];
       if (Array.isArray(actions)) {
@@ -164,6 +234,7 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
     };
     pathCells = [];
     rejectCells = [];
+    heatCells = [];
     drawWorld();
   }
 
@@ -258,6 +329,7 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
   var scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
   var url = scheme + '://' + window.location.host + '/ws';
   var socket = new WebSocket(url);
+  wireReplaySeek(socket);
   if (wsEl) wsEl.textContent = url;
   socket.onopen = function () {
     if (wsEl) wsEl.textContent = 'open — ' + url;
@@ -278,6 +350,10 @@ th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #21262d}
     if (msg.type === 'log') pushLogLine(msg.line);
     if (msg.type === 'world_grid') applyWorldGrid(msg);
     if (msg.type === 'nav_trace') applyNavTrace(msg);
+    if (msg.type === 'nav_heatmap') applyNavHeatmap(msg);
+    if (msg.type === 'nav_heatmap_clear') applyNavHeatmapClear(msg);
+    if (msg.type === 'movement_fail') applyMovementFail(msg);
+    if (msg.type === 'replay_ready') applyReplayReady(msg);
   };
 })();
 </script>
@@ -295,6 +371,11 @@ export class WebCompanion {
   private unsubCompanion: (() => void) | null = null;
   private lastStatus: UiStatusPayload | null = null;
   private readonly logRing: UiLogLine[] = [];
+  private onClientWsText: ((text: string) => void) | null = null;
+
+  public setClientWsHandler(handler: ((text: string) => void) | null): void {
+    this.onClientWsText = handler;
+  }
 
   private pushLine(line: UiLogLine): void {
     this.logRing.push(line);
@@ -417,7 +498,14 @@ export class WebCompanion {
         websocket: {
           open: (ws: Bun.ServerWebSocket<WsData>): void => this.onWsOpen(ws),
           close: (ws: Bun.ServerWebSocket<WsData>): void => this.onWsClose(ws),
-          message(): void {},
+          message: (
+            _ws: Bun.ServerWebSocket<WsData>,
+            msg: string | Buffer,
+          ): void => {
+            const t =
+              typeof msg === 'string' ? msg : Buffer.from(msg).toString('utf8');
+            if (this.onClientWsText !== null) this.onClientWsText(t);
+          },
         },
       });
     } catch (e) {
@@ -466,5 +554,6 @@ export class WebCompanion {
     this.lastStatus = null;
     this.logRing.length = 0;
     this.sockets.clear();
+    this.onClientWsText = null;
   }
 }

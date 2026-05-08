@@ -30,6 +30,15 @@ export function buildOtlpTracesIngestUrl(raw: string): string {
   return `${u}${tail}`;
 }
 
+export function buildOtlpMetricsIngestUrl(raw: string): string {
+  let u = raw.trim();
+  while (u.endsWith('/')) u = u.slice(0, -1);
+  const tail = '/v1/metrics';
+  if (u.toLowerCase().endsWith(tail)) u = u.slice(0, u.length - tail.length);
+  while (u.endsWith('/')) u = u.slice(0, -1);
+  return `${u}${tail}`;
+}
+
 function attrString(key: string, value: string): Record<string, unknown> {
   return { key, value: { stringValue: value } };
 }

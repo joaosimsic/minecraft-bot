@@ -60,33 +60,49 @@ export class GuidedMode implements BotMode {
 
   public async tick(): Promise<void> {
     if (this.atGoal) {
-      // #region agent log
       debugLog('GuidedMode.ts:tick:atGoal', 'tick skipped: atGoal', {}, 'H7');
-      // #endregion
       await Utils.sleep(1000);
       return;
     }
 
     const t = this.target ?? this.defaultGoal;
     if (t === null) {
-      // #region agent log
-      debugLog('GuidedMode.ts:tick:noTarget', 'tick skipped: no target', { hasTarget: this.target !== null, hasDefault: this.defaultGoal !== null }, 'H7');
-      // #endregion
+      debugLog(
+        'GuidedMode.ts:tick:noTarget',
+        'tick skipped: no target',
+        {
+          hasTarget: this.target !== null,
+          hasDefault: this.defaultGoal !== null,
+        },
+        'H7',
+      );
       await Utils.sleep(1000);
       return;
     }
 
     if (this.walkSuspended) {
-      // #region agent log
-      debugLog('GuidedMode.ts:tick', 'tick skipped: walkSuspended', { target: { x: t.x, y: t.y, z: t.z }, consecutiveWalkFailures: this.consecutiveWalkFailures }, 'H5');
-      // #endregion
+      debugLog(
+        'GuidedMode.ts:tick',
+        'tick skipped: walkSuspended',
+        {
+          target: { x: t.x, y: t.y, z: t.z },
+          consecutiveWalkFailures: this.consecutiveWalkFailures,
+        },
+        'H5',
+      );
       await Utils.sleep(1000);
       return;
     }
 
-    // #region agent log
-    debugLog('GuidedMode.ts:tick:beforeWalkTo', 'calling walkTo', { target: { x: t.x, y: t.y, z: t.z }, consecutiveWalkFailures: this.consecutiveWalkFailures }, 'H0');
-    // #endregion
+    debugLog(
+      'GuidedMode.ts:tick:beforeWalkTo',
+      'calling walkTo',
+      {
+        target: { x: t.x, y: t.y, z: t.z },
+        consecutiveWalkFailures: this.consecutiveWalkFailures,
+      },
+      'H0',
+    );
     const reached = await this.navigator.walkTo(t);
     if (!reached) {
       this.consecutiveWalkFailures += 1;

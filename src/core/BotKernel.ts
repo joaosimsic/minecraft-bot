@@ -14,6 +14,7 @@ import type { MovementClass } from '../navigation/world/World';
 import { BotRuntimeContext } from './BotRuntimeContext';
 import { Logger } from '../shared/Logger';
 import { Metrics } from '../shared/Metrics';
+import { MetricsExporter } from '../shared/MetricsExporter';
 
 export class BotKernel {
   private readonly touchStatusThrottled: () => void;
@@ -32,6 +33,7 @@ export class BotKernel {
   public readonly guidedMode: GuidedMode;
   public readonly controller: ModeController;
   public readonly telemetry: Telemetry;
+  public readonly metricsExporter: MetricsExporter;
 
   public constructor(
     bot: Bot,
@@ -74,6 +76,8 @@ export class BotKernel {
       botId,
       this.metrics,
     );
+    this.metricsExporter = new MetricsExporter(botId, this.metrics);
+    this.metricsExporter.start();
     this.telemetry.start();
     let lastEmit = 0;
     this.touchStatusThrottled = (): void => {

@@ -7,6 +7,7 @@ import { Recovery } from './recovery/Recovery';
 import { NavigationRecorder } from './telemetry/Recorder';
 import { NavigationExecutor } from './movement/Executor';
 import { NavigationValidator } from './movement/Validator';
+import { failureAnchorFootBlock } from './failureAnchor';
 import { BotWorld } from './world/BotWorld';
 import { Collision } from './world/Collision';
 import { Vec3 } from 'vec3';
@@ -121,21 +122,18 @@ export class NavigationController {
   public async walkTo(goalIn: Vec3, rangeIn: number): AsyncResult<boolean> {
     const snap = this.snapGoal(goalIn, rangeIn);
     if (snap === null) {
-      // #region agent log
       debugLog(
         'NavigationController.ts:walkTo:snapNull',
         'goal_unsnappable',
         { goalIn: { x: goalIn.x, y: goalIn.y, z: goalIn.z }, rangeIn },
         'H1',
       );
-      // #endregion
       this.log.warn('plan_failed', 'goal_unsnappable');
       return ok(false);
     }
     const goal = snap.goal;
     const range = snap.range;
 
-    // #region agent log
     debugLog(
       'NavigationController.ts:walkTo:snapResult',
       'goal snapped',
@@ -149,8 +147,6 @@ export class NavigationController {
       },
       'H2',
     );
-    // #endregion
-
     if (this.bot.entity.position.distanceTo(goal) <= range) return ok(true);
 
     this.recovery.resetForNewGoal();
@@ -158,10 +154,10 @@ export class NavigationController {
     while (guard < 200) {
       guard += 1;
 
-      // #region agent log
       const _pre = this.bot.entity.position;
       const _vel = this.bot.entity.velocity;
-      const _og = (this.bot.entity as Record<string, unknown>).onGround;
+      const _og = (this.bot.entity as unknown as Record<string, unknown>)
+        .onGround;
       debugLog(
         'NavigationController.ts:walkTo:loopTop',
         'loop iteration start',
@@ -183,8 +179,6 @@ export class NavigationController {
         },
         'H13',
       );
-      // #endregion
-
       const bp = this.bot.entity.position;
       let startNode = Collision.destinationNode(
         this.world,
@@ -194,7 +188,6 @@ export class NavigationController {
         new Set(),
       );
       if (!Collision.canStandAt(this.world, startNode)) {
-        // #region agent log
         const _bx = Math.floor(bp.x),
           _by = Math.floor(bp.y),
           _bz = Math.floor(bp.z);
@@ -236,10 +229,9 @@ export class NavigationController {
           },
           'H10',
         );
-        // #endregion
-
-        const entityOnGround = (this.bot.entity as Record<string, unknown>)
-          .onGround;
+        const entityOnGround = (
+          this.bot.entity as unknown as Record<string, unknown>
+        ).onGround;
         if (entityOnGround !== true) {
           const snapped = Collision.findStandableNear(
             this.world,
@@ -250,7 +242,6 @@ export class NavigationController {
             1,
           );
           if (snapped === null) {
-            // #region agent log
             debugLog(
               'NavigationController.ts:walkTo:startNotStandable',
               'start_not_standable',
@@ -261,14 +252,12 @@ export class NavigationController {
               },
               'H2',
             );
-            // #endregion
             this.log.warn('plan_failed', 'start_not_standable');
             return ok(false);
           }
           startNode = snapped;
         }
 
-        // #region agent log
         debugLog(
           'NavigationController.ts:walkTo:startResolution',
           'start node resolved',
@@ -284,7 +273,6 @@ export class NavigationController {
           },
           'H16',
         );
-        // #endregion
       }
 
       const gx = Math.floor(goal.x);
@@ -298,7 +286,6 @@ export class NavigationController {
         new Set(),
       );
 
-      // #region agent log
       const _footMc = this.world.footMovementClass(
         startNode.x,
         startNode.y,
@@ -334,9 +321,6 @@ export class NavigationController {
         },
         'H9',
       );
-      // #endregion
-
-      // #region agent log
       const _fwdProbe: Record<string, unknown>[] = [];
       const _goalDz = Math.sign(gz - startNode.z);
       const _goalDx = Math.sign(gx - startNode.x);
@@ -371,8 +355,6 @@ export class NavigationController {
         { startKey: startNode.key, goalKey: goalNode.key, fwdProbe: _fwdProbe },
         'H1',
       );
-      // #endregion
-
       this.runSeq += 1;
       const runId = `nav-${Date.now()}-${this.runSeq}`;
       const expandOpts = config.env.NAV_DIAGONAL
@@ -391,6 +373,7 @@ export class NavigationController {
         {
           maxExpansions: config.env.NAV_MAX_EXPANSIONS,
           heuristicWeight: config.env.NAV_HEURISTIC_WEIGHT,
+          heuristicTrapThreshold: config.env.NAV_HEURISTIC_TRAP_THRESHOLD,
           yieldEvery:
             config.env.REPLAY_JSONL !== undefined
               ? 0
@@ -398,7 +381,6 @@ export class NavigationController {
         },
       );
       if (planOp[0] !== null) {
-        // #region agent log
         debugLog(
           'NavigationController.ts:walkTo:planFailed',
           'astar_failed',
@@ -410,7 +392,6 @@ export class NavigationController {
           },
           'H3',
         );
-        // #endregion
         this.log.warn('plan_failed', planOp[0].message);
         return ok(false);
       }
@@ -446,7 +427,6 @@ export class NavigationController {
         const pos = this.bot.entity.position;
 
         if (plan.partial) {
-          // #region agent log
           debugLog(
             'NavigationController.ts:walkTo:partialDrained',
             'partial path drained, replanning',
@@ -462,11 +442,9 @@ export class NavigationController {
             },
             'H11',
           );
-          // #endregion
           continue;
         }
 
-        // #region agent log
         debugLog(
           'NavigationController.ts:walkTo:planIncomplete',
           'drain done but not in range',
@@ -482,7 +460,6 @@ export class NavigationController {
           },
           'H4',
         );
-        // #endregion
         const [rErr] = this.recovery.consumeReplan('plan_incomplete', {
           x: Math.floor(pos.x),
           y: Math.floor(pos.y),
@@ -499,15 +476,12 @@ export class NavigationController {
         z: Math.floor(pos.z),
       };
 
-      // #region agent log
       debugLog(
         'NavigationController.ts:walkTo:drainFail',
         'executor rejected',
         { phase: drain.phase, reason: drain.reason, guard },
         'H4',
       );
-      // #endregion
-
       if (drain.phase === 'pre_action') {
         this.recovery.onPreActionRejected(
           drain.action,
@@ -523,6 +497,16 @@ export class NavigationController {
         continue;
       }
 
+      const anchor = failureAnchorFootBlock(drain.action);
+      let worldSnap: Record<string, unknown> | null = null;
+      if (anchor !== null) {
+        worldSnap = this.world.buildFailureSnapshotV1(
+          anchor.x,
+          anchor.y,
+          anchor.z,
+        );
+      }
+
       const [feErr] = this.recovery.recordVerifiedFailure(
         drain.action.from,
         drain.action.to,
@@ -532,6 +516,7 @@ export class NavigationController {
         drain.phase,
         drain.action,
         drain.observed,
+        worldSnap,
       );
 
       if (feErr) return [feErr, null];

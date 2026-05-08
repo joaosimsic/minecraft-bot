@@ -24,11 +24,15 @@ export type SearchStartPayload = {
 };
 
 export type SearchEndPayload = {
-  status: 'ok' | 'fail' | 'aborted';
+  status: 'ok' | 'fail' | 'aborted' | 'partial';
   expanded?: number;
   cost?: number | null;
   reason?: string;
   durationTicks?: number;
+  runId?: string;
+  manhattan?: number;
+  heuristic_ratio?: number;
+  heuristic_trap?: boolean;
 };
 
 export type MovementPhase = 'pre_action' | 'post_action' | 'macro';
@@ -39,6 +43,7 @@ export type MovementFailPayload = {
   observed?: Record<string, unknown>;
   phase: MovementPhase;
   tick?: number;
+  world_snapshot?: Record<string, unknown>;
 };
 
 export type EdgePenalizedPayload = {

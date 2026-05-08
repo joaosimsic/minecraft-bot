@@ -103,4 +103,25 @@ describe('ReplayState', (): void => {
     expect(p.envTail![0]!.trace_id).toBe('tid-1');
     expect(p.envTail![0]!.blockName).toBe('stone');
   });
+
+  test('exportSnapshot roundtrips through loadSnapshot', (): void => {
+    const st = new ReplayState();
+    st.applyEvent({
+      ts: 't0',
+      type: 'spawn',
+      botId: 'alice',
+    });
+    st.applyEvent({
+      ts: 't1',
+      type: 'position',
+      botId: 'alice',
+      data: { pos: { x: 1, y: 2, z: 3 } },
+    });
+    const snap = st.exportSnapshot();
+    const st2 = new ReplayState();
+    st2.loadSnapshot(snap);
+    const p2 = st2.toPayload(null);
+    expect(p2.fleet.length).toBe(1);
+    expect(p2.fleet[0]!.positionLabel).toContain('1.0');
+  });
 });

@@ -63,7 +63,8 @@ export class Recovery {
     reason: string,
     phase: MovementPhase,
     action: NavigationAction,
-    observed?: Record<string, unknown>,
+    observed: Record<string, unknown> | undefined,
+    worldSnapshot: Record<string, unknown> | null,
   ): Result<null> {
     const row = this.memory.recordFailure(fromKey, toKey, kind, tick);
 
@@ -73,13 +74,16 @@ export class Recovery {
       penalty: row.learnedAdd,
     });
 
-    this.recorder.emit(NAV_EVENT.MOVEMENT_FAIL, {
+    const failPayload: Record<string, unknown> = {
       action: action.toTelemetry(),
       reason,
       tick,
       phase,
       observed,
-    });
+    };
+    if (worldSnapshot !== null) failPayload.world_snapshot = worldSnapshot;
+
+    this.recorder.emit(NAV_EVENT.MOVEMENT_FAIL, failPayload);
 
     return okVoid();
   }

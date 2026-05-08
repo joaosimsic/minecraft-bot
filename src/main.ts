@@ -13,9 +13,12 @@ import { InputHandler } from './core/InputHandler';
 import { MacroStore } from './core/MacroStore';
 import { ReplayFleetBridge } from './replay/ReplayFleetBridge';
 import { ReplayState } from './replay/ReplayState';
+import { ReplayDrive } from './replay/ReplayDrive';
 import { pumpReplayFile } from './replay/pumpReplayFile';
+import { jsonParseLine } from './replay/replayJsonl';
 import { parseWebArgv } from './web/webArgv';
 import { WebCompanion } from './web/WebCompanion';
+import { getTraceId } from './shared/traceContext';
 
 const log = new Logger('main');
 
@@ -52,7 +55,7 @@ class BotRunner {
     const snap = k.movementGrid16();
     if (snap === null) return;
     const cells = snap.cells.map((c): string => (c === 'water' ? 'w' : 'g'));
-    this.uiBus.emitCompanion({
+    const msg: Record<string, unknown> = {
       type: 'world_grid',
       botId: k.botId,
       anchorX: snap.anchorX,
@@ -60,7 +63,10 @@ class BotRunner {
       anchorZ: snap.anchorZ,
       side: snap.side,
       cells,
-    });
+    };
+    const tid = getTraceId();
+    if (tid !== undefined) msg.trace_id = tid;
+    this.uiBus.emitCompanion(msg);
   }
 
   private shouldUseProxy(): boolean {
@@ -218,7 +224,9 @@ class BotRunner {
 
     toUi(`replay file: ${path}`);
 
-    const [pe, count] = await pumpReplayFile(
+    let drive: ReplayDrive | null = null;
+
+    const [pe, pump] = await pumpReplayFile(
       path,
       this.uiBus,
       state,
@@ -231,8 +239,43 @@ class BotRunner {
       return [pe, null];
     }
 
+    if (pump !== null && pump.count > 0) {
+      drive = new ReplayDrive(
+        path,
+        this.uiBus,
+        state,
+        pulse,
+        pump.index,
+        pump.checkpoints,
+      );
+      const b = drive.timelineBounds();
+      this.uiBus.emitCompanion({
+        type: 'replay_ready',
+        minTs: b.minTs,
+        maxTs: b.maxTs,
+      });
+    }
+
+    if (this.webCompanion !== null) {
+      this.webCompanion.setClientWsHandler((raw: string): void => {
+        if (drive === null) return;
+        const [je, v] = jsonParseLine(raw);
+        if (je !== null) return;
+        if (v === null) return;
+        if (typeof v !== 'object') return;
+        const o = v as Record<string, unknown>;
+        if (o['type'] !== 'replay_seek') return;
+        const ts = o['tsMs'];
+        if (typeof ts !== 'number') return;
+        void drive.seekToTsMs(ts).then((r): void => {
+          const err = r[0];
+          if (err !== null) toUi(`replay seek: ${err.message}`);
+        });
+      });
+    }
+
     pulse();
-    toUi(`replay loaded ${count ?? 0} event(s) — read-only`);
+    toUi(`replay loaded ${pump?.count ?? 0} event(s) — read-only`);
     return okVoid();
   }
 
@@ -330,6 +373,7 @@ class BotRunner {
         log.info('disconnected', username);
         kernel.controller.halt();
         kernel.telemetry.stop();
+        kernel.metricsExporter.stop();
         this.fleet.markDisconnected(username);
       });
     }

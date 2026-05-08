@@ -32,6 +32,7 @@ describe('Telemetry observed', () => {
         expected: { x: 1, y: 65, z: 0 },
         got: { x: 0, y: 65, z: 0 },
       }).observed,
+      null,
     );
 
     const hit = rec.frames.find(

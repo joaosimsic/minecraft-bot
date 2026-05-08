@@ -1,5 +1,3 @@
-# Jaeger UI: http://127.0.0.1:16686
-# OTLP HTTP (POST JSON to /v1/traces): port 4318 — opening http://127.0.0.1:4318/ in a browser returns 404; that is normal.
 services:
   jaeger:
     image: jaegertracing/all-in-one:1.62.0

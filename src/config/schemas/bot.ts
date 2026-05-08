@@ -36,6 +36,7 @@ export const botSchema = {
     .default(10),
   NAV_MAX_EXPANSIONS: z.coerce.number().int().min(100).default(20000),
   NAV_HEURISTIC_WEIGHT: z.coerce.number().min(1).default(1.5),
+  NAV_HEURISTIC_TRAP_THRESHOLD: z.coerce.number().min(1).default(50),
   NAV_YIELD_EVERY: z.coerce.number().int().min(0).default(256),
 
   REPLAY_JSONL: z.string().min(1).optional(),
@@ -57,4 +58,9 @@ export const botSchema = {
       typeof v === 'string' && v.trim().length > 0 ? v.trim() : 'minecraft-bot',
     z.string().min(1),
   ),
+  TELEMETRY_METRICS_EXPORT_MS: z.coerce
+    .number()
+    .int()
+    .min(5000)
+    .default(30_000),
 };

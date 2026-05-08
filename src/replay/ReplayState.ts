@@ -287,4 +287,81 @@ export class ReplayState {
 
     return { focused, fleet, focusedId: fid, homeXZ, envTail };
   }
+
+  public exportSnapshot(): Record<string, unknown> {
+    const rows: Record<string, unknown> = {};
+    for (const [id, r] of this.rows) {
+      rows[id] = {
+        phase: r.phase,
+        online: r.online,
+        modeLabel: r.modeLabel,
+        lastError: r.lastError,
+        pos: r.pos,
+        health: r.health,
+        food: r.food,
+        taskLine: r.taskLine,
+      };
+    }
+    return {
+      focusedId: this.focusedId,
+      rows,
+      envLog: this.envLog.slice(),
+    };
+  }
+
+  public loadSnapshot(raw: Record<string, unknown>): void {
+    this.rows.clear();
+    this.envLog.length = 0;
+    const fid = raw['focusedId'];
+    this.focusedId = typeof fid === 'string' ? fid : '';
+    const rowsRaw = raw['rows'];
+    if (rowsRaw !== null && typeof rowsRaw === 'object') {
+      for (const [id, v] of Object.entries(
+        rowsRaw as Record<string, unknown>,
+      )) {
+        if (typeof v !== 'object' || v === null) continue;
+        const o = v as Record<string, unknown>;
+        const ph = o['phase'];
+        const phase: BotPhase =
+          ph === 'connecting' ||
+          ph === 'spawned' ||
+          ph === 'running' ||
+          ph === 'disconnected'
+            ? ph
+            : 'connecting';
+        const posRaw = o['pos'];
+        let pos: { x: number; y: number; z: number } | null = null;
+        if (posRaw !== null && typeof posRaw === 'object') {
+          const pr = posRaw as Record<string, unknown>;
+          const px = readNum(pr, 'x');
+          const py = readNum(pr, 'y');
+          const pz = readNum(pr, 'z');
+          if (px !== null && py !== null && pz !== null)
+            pos = { x: px, y: py, z: pz };
+        }
+        const hp = readNum(o, 'health');
+        const fd = readNum(o, 'food');
+        const ml = readString(o, 'modeLabel');
+        const le = o['lastError'];
+        const tl = o['taskLine'];
+        const on = o['online'];
+        this.rows.set(id, {
+          phase,
+          online: on === true,
+          modeLabel: ml ?? 'IdleMode',
+          lastError: typeof le === 'string' ? le : null,
+          pos,
+          health: hp,
+          food: fd,
+          taskLine: typeof tl === 'string' ? tl : null,
+        });
+      }
+    }
+    const env = raw['envLog'];
+    if (!Array.isArray(env)) return;
+    for (const e of env) {
+      if (typeof e !== 'object' || e === null) continue;
+      this.envLog.push(e as EnvUpdateSnapshot);
+    }
+  }
 }

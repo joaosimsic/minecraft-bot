@@ -8,6 +8,14 @@ describe('Heuristic', () => {
     const b = new Node(1, 2, 3);
     expect(Heuristic.estimate(a, b)).toBe(1 + 3 + 2 * 2);
   });
+
+  test('water node uses same admissible heuristic as ground', () => {
+    const a = new Node(0, 0, 0, new Set(), 'water');
+    const b = new Node(2, 1, 0);
+    const ground = new Node(0, 0, 0, new Set(), 'ground');
+    expect(Heuristic.estimate(a, b)).toBe(Heuristic.estimate(ground, b));
+    expect(Heuristic.estimate(a, b)).toBe(2 + 1 * 2);
+  });
 });
 
 describe('parseNodeKey', () => {

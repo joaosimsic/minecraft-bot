@@ -72,7 +72,10 @@ export class Collision {
 
     if (node.movementClass !== 'water') {
       const [below] = worldSupportAndBody(world, node);
-      if (!below.topSupportStand) return false;
+      if (!below.topSupportStand) {
+        const belowClass = world.footMovementClass(node.x, node.y - 1, node.z);
+        if (belowClass !== 'water') return false;
+      }
     }
 
     if (

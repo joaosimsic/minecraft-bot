@@ -17,6 +17,10 @@ export class FixtureWorld implements World {
 
   public footMovementClass(x: number, y: number, z: number): MovementClass {
     if (this.waterFeet.has(FixtureWorld.k(x, y, z))) return 'water';
+    if (this.waterFeet.has(FixtureWorld.k(x, y - 1, z))) {
+      const foot = this.cell(x, y, z);
+      if (!foot.blocksBody) return 'water';
+    }
     return 'ground';
   }
 

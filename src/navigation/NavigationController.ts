@@ -12,6 +12,7 @@ import { Collision } from './world/Collision';
 import { Vec3 } from 'vec3';
 import { config } from '../config';
 import { Logger } from '../shared/Logger';
+import { debugLog } from '../shared/debugLog';
 
 const REPLAN_BUDGET = 14;
 const TRANSIENT_REPLAN_BUDGET = 6;
@@ -76,6 +77,14 @@ export class NavigationController {
   public async walkTo(goalIn: Vec3, rangeIn: number): AsyncResult<boolean> {
     const snap = this.snapGoal(goalIn, rangeIn);
     if (snap === null) {
+      // #region agent log
+      debugLog(
+        'NavigationController.ts:walkTo:snapNull',
+        'goal_unsnappable',
+        { goalIn: { x: goalIn.x, y: goalIn.y, z: goalIn.z }, rangeIn },
+        'H1',
+      );
+      // #endregion
       this.log.warn('plan_failed', 'goal_unsnappable');
       return ok(false);
     }
@@ -88,14 +97,135 @@ export class NavigationController {
     let guard = 0;
     while (guard < 200) {
       guard += 1;
+
+      // #region agent log
+      const _pre = this.bot.entity.position;
+      const _vel = this.bot.entity.velocity;
+      const _og = (this.bot.entity as Record<string, unknown>).onGround;
+      debugLog(
+        'NavigationController.ts:walkTo:loopTop',
+        'loop iteration start',
+        {
+          guard,
+          pos: {
+            x: +_pre.x.toFixed(2),
+            y: +_pre.y.toFixed(4),
+            z: +_pre.z.toFixed(2),
+          },
+          vel: _vel
+            ? {
+                x: +_vel.x.toFixed(4),
+                y: +_vel.y.toFixed(4),
+                z: +_vel.z.toFixed(4),
+              }
+            : null,
+          onGround: _og,
+        },
+        'H13',
+      );
+      // #endregion
+
       const bp = this.bot.entity.position;
-      const startNode = Collision.destinationNode(
+      let startNode = Collision.destinationNode(
         this.world,
         Math.floor(bp.x),
         Math.floor(bp.y),
         Math.floor(bp.z),
         new Set(),
       );
+      if (!Collision.canStandAt(this.world, startNode)) {
+        // #region agent log
+        const _bx = Math.floor(bp.x),
+          _by = Math.floor(bp.y),
+          _bz = Math.floor(bp.z);
+        const _probes: Record<string, unknown>[] = [];
+        for (let _dy = -3; _dy <= 2; _dy++) {
+          const _py = _by + _dy;
+          const _mc = this.world.footMovementClass(_bx, _py, _bz);
+          const _c = this.world.cell(_bx, _py, _bz);
+          const _n = Collision.destinationNode(
+            this.world,
+            _bx,
+            _py,
+            _bz,
+            new Set(),
+          );
+          const _cs = Collision.canStandAt(this.world, _n);
+          const _blk = this.bot.blockAt(new Vec3(_bx, _py, _bz));
+          _probes.push({
+            y: _py,
+            mc: _mc,
+            cell: _c,
+            key: _n.key,
+            canStand: _cs,
+            blkName: _blk?.name ?? 'NULL',
+            blkBB: _blk?.boundingBox ?? 'NULL',
+            blkId: _blk?.type ?? -1,
+          });
+        }
+        debugLog(
+          'NavigationController.ts:walkTo:snapProbe',
+          'start not standable, probing column',
+          {
+            bpRaw: {
+              x: +bp.x.toFixed(2),
+              y: +bp.y.toFixed(2),
+              z: +bp.z.toFixed(2),
+            },
+            probes: _probes,
+          },
+          'H10',
+        );
+        // #endregion
+
+        const entityOnGround = (this.bot.entity as Record<string, unknown>)
+          .onGround;
+        if (entityOnGround !== true) {
+          const snapped = Collision.findStandableNear(
+            this.world,
+            Math.floor(bp.x),
+            Math.floor(bp.y),
+            Math.floor(bp.z),
+            2,
+            1,
+          );
+          if (snapped === null) {
+            // #region agent log
+            debugLog(
+              'NavigationController.ts:walkTo:startNotStandable',
+              'start_not_standable',
+              {
+                bpx: Math.floor(bp.x),
+                bpy: Math.floor(bp.y),
+                bpz: Math.floor(bp.z),
+              },
+              'H2',
+            );
+            // #endregion
+            this.log.warn('plan_failed', 'start_not_standable');
+            return ok(false);
+          }
+          startNode = snapped;
+        }
+
+        // #region agent log
+        debugLog(
+          'NavigationController.ts:walkTo:startResolution',
+          'start node resolved',
+          {
+            entityOnGround,
+            usedActualPos: entityOnGround === true,
+            startKey: startNode.key,
+            bpRaw: {
+              x: +bp.x.toFixed(2),
+              y: +bp.y.toFixed(2),
+              z: +bp.z.toFixed(2),
+            },
+          },
+          'H16',
+        );
+        // #endregion
+      }
 
       const gx = Math.floor(goal.x);
       const gy = Math.floor(goal.y);
@@ -107,6 +237,44 @@ export class NavigationController {
         gz,
         new Set(),
       );
+
+      // #region agent log
+      const _footMc = this.world.footMovementClass(
+        startNode.x,
+        startNode.y,
+        startNode.z,
+      );
+      const _footCell = this.world.cell(startNode.x, startNode.y, startNode.z);
+      const _belowCell = this.world.cell(
+        startNode.x,
+        startNode.y - 1,
+        startNode.z,
+      );
+      const _belowMc = this.world.footMovementClass(
+        startNode.x,
+        startNode.y - 1,
+        startNode.z,
+      );
+      debugLog(
+        'NavigationController.ts:walkTo:startInfo',
+        'start node details',
+        {
+          startKey: startNode.key,
+          startMc: startNode.movementClass,
+          footMcNow: _footMc,
+          footCell: _footCell,
+          belowCell: _belowCell,
+          belowMc: _belowMc,
+          goalKey: goalNode.key,
+          bpRaw: {
+            x: +bp.x.toFixed(2),
+            y: +bp.y.toFixed(2),
+            z: +bp.z.toFixed(2),
+          },
+        },
+        'H9',
+      );
+      // #endregion
 
       this.runSeq += 1;
       const runId = `nav-${Date.now()}-${this.runSeq}`;
@@ -125,6 +293,7 @@ export class NavigationController {
         expandOpts,
         {
           maxExpansions: config.env.NAV_MAX_EXPANSIONS,
+          heuristicWeight: config.env.NAV_HEURISTIC_WEIGHT,
           yieldEvery:
             config.env.REPLAY_JSONL !== undefined
               ? 0
@@ -132,12 +301,32 @@ export class NavigationController {
         },
       );
       if (planOp[0] !== null) {
+        // #region agent log
+        debugLog(
+          'NavigationController.ts:walkTo:planFailed',
+          'astar_failed',
+          {
+            err: planOp[0].message,
+            startKey: startNode.key,
+            goalKey: goalNode.key,
+            guard,
+          },
+          'H3',
+        );
+        // #endregion
         this.log.warn('plan_failed', planOp[0].message);
         return ok(false);
       }
 
       const plan = planOp[1];
       if (plan === null) return fail(new Error('plan'));
+
+      if (plan.partial) {
+        this.log.info(
+          'partial path',
+          `${plan.path.length} steps, expanded ${plan.nodesExpanded}`,
+        );
+      }
 
       this.edgeMemory.tickDecay(this.bot.time.age);
 
@@ -158,6 +347,45 @@ export class NavigationController {
         const distNow = this.bot.entity.position.distanceTo(goal);
         if (distNow <= range) return ok(true);
         const pos = this.bot.entity.position;
+
+        if (plan.partial) {
+          // #region agent log
+          debugLog(
+            'NavigationController.ts:walkTo:partialDrained',
+            'partial path drained, replanning',
+            {
+              distNow,
+              range,
+              guard,
+              pos: {
+                x: Math.floor(pos.x),
+                y: Math.floor(pos.y),
+                z: Math.floor(pos.z),
+              },
+            },
+            'H11',
+          );
+          // #endregion
+          continue;
+        }
+
+        // #region agent log
+        debugLog(
+          'NavigationController.ts:walkTo:planIncomplete',
+          'drain done but not in range',
+          {
+            distNow,
+            range,
+            guard,
+            pos: {
+              x: Math.floor(pos.x),
+              y: Math.floor(pos.y),
+              z: Math.floor(pos.z),
+            },
+          },
+          'H4',
+        );
+        // #endregion
         const [rErr] = this.recovery.consumeReplan('plan_incomplete', {
           x: Math.floor(pos.x),
           y: Math.floor(pos.y),
@@ -173,6 +401,15 @@ export class NavigationController {
         y: Math.floor(pos.y),
         z: Math.floor(pos.z),
       };
+
+      // #region agent log
+      debugLog(
+        'NavigationController.ts:walkTo:drainFail',
+        'executor rejected',
+        { phase: drain.phase, reason: drain.reason, guard },
+        'H4',
+      );
+      // #endregion
 
       if (drain.phase === 'pre_action') {
         this.recovery.onPreActionRejected(
@@ -220,7 +457,7 @@ export class NavigationController {
       return { goal: goalIn, range: rangeIn };
     }
 
-    const snapped = Collision.findStandableNear(this.world, gx, gy, gz, 8);
+    const snapped = Collision.findStandableNear(this.world, gx, gy, gz, 8, 8);
     if (snapped === null) return null;
 
     const newGoal = new Vec3(snapped.x + 0.5, snapped.y, snapped.z + 0.5);

@@ -41,8 +41,8 @@ export type ExpandOpts = {
 export class NeighborGenerator {
   private static aquaticBump(from: Node, to: Node): number {
     let bump = 0;
-    if (from.movementClass === 'water') bump += 2;
-    if (to.movementClass === 'water') bump += 2;
+    if (from.movementClass === 'water') bump += 1;
+    if (to.movementClass === 'water') bump += 1;
     return bump;
   }
 

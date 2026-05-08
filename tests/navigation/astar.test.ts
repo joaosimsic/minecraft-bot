@@ -52,7 +52,8 @@ describe('AStar', () => {
       { maxExpansions: 5 },
     );
 
-    expect(r[0]?.message).toBe('no_path_budget');
+    expect(r[0]).toBeNull();
+    expect(r[1]!.partial).toBe(true);
     expect(ends[0]?.reason).toBe('expansion_budget');
     expect(ends[0]?.expanded).toBe(5);
   });
@@ -82,7 +83,8 @@ describe('AStar', () => {
       },
     );
 
-    expect(r[0]?.message).toBe('no_path_budget');
+    expect(r[0]).toBeNull();
+    expect(r[1]!.partial).toBe(true);
     expect(yields).toBe(Math.floor(100 / 10));
   });
 

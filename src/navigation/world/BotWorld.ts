@@ -4,6 +4,7 @@ import type { Entity } from 'prismarine-entity';
 import { Vec3 } from 'vec3';
 import type { MovementClass, World, WorldCell } from './World';
 import { emptyAirCell, solidGroundCell } from './Collision';
+import { debugLog } from '../../shared/debugLog';
 
 const FLUID_RE = /water|lava|flowing_/;
 
@@ -48,10 +49,22 @@ export class BotWorld implements World {
     return c;
   }
 
+  private footMcLogCount = 0;
+
   public footMovementClass(x: number, y: number, z: number): MovementClass {
     const b = this.bot.blockAt(new Vec3(x, y, z));
     if (b === null) return 'ground';
     if (FLUID_RE.test(b.name)) return 'water';
+    if (b.name === 'air' || b.boundingBox === 'empty') {
+      const below = this.bot.blockAt(new Vec3(x, y - 1, z));
+      if (below !== null && FLUID_RE.test(below.name)) return 'water';
+    }
+    // #region agent log
+    if (this.footMcLogCount < 5) {
+      this.footMcLogCount += 1;
+      debugLog('BotWorld.ts:footMovementClass', 'mc query', { x, y, z, blockName: b.name, bb: b.boundingBox, result: 'ground' }, 'H9');
+    }
+    // #endregion
     return 'ground';
   }
 

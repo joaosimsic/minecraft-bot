@@ -2,6 +2,7 @@ import { Logger } from '../shared/Logger';
 import type { Metrics } from '../shared/Metrics';
 import type { BotMode } from '../modes/BotMode';
 import { IdleMode } from '../modes/IdleMode';
+import { debugLog } from '../shared/debugLog';
 
 export class ModeController {
   private currentMode: BotMode = new IdleMode();
@@ -20,6 +21,9 @@ export class ModeController {
   public switchTo(mode: BotMode): void {
     const from = this.currentMode.constructor.name;
     const to = mode.constructor.name;
+    // #region agent log
+    debugLog('ModeController.ts:switchTo', 'switching mode', { from, to }, 'H6');
+    // #endregion
     this.metrics.inc('mode.switch');
     this.log.info('mode ->', to);
     this.log.decision('mode_switch', 'controller_request', { from, to });
@@ -54,6 +58,9 @@ export class ModeController {
   }
 
   public async run(): Promise<void> {
+    // #region agent log
+    debugLog('ModeController.ts:run', 'run loop started', { mode: this.currentMode.constructor.name, active: this.active }, 'H6');
+    // #endregion
     while (this.active) {
       await this.currentMode.tick();
     }

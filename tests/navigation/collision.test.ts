@@ -53,4 +53,27 @@ describe('Collision vertical moves', () => {
     const from = new Node(4, 65, 0, new Set());
     expect(Collision.findClosedDoorBlockingWalk(w, from, 1, 0)?.y).toBe(64);
   });
+
+  test('water surface air feet allow cardinal walk between columns', () => {
+    const w = new FixtureWorld();
+    w.markWaterFoot(0, 64, 0);
+    w.markWaterFoot(1, 64, 0);
+    w.putCell(0, 65, 0, emptyAirCell());
+    w.putCell(0, 66, 0, emptyAirCell());
+    w.putCell(1, 65, 0, emptyAirCell());
+    w.putCell(1, 66, 0, emptyAirCell());
+    const from = Collision.destinationNode(w, 0, 65, 0, new Set());
+    expect(Collision.canStandAt(w, from)).toBe(true);
+    expect(Collision.canWalkCardinal(w, from, 1, 0)).toBe(true);
+  });
+
+  test('canStandAt allows ground class over water when support cell is fluid', () => {
+    const w = new FixtureWorld();
+    w.markWaterFoot(0, 63, 0);
+    w.putCell(0, 64, 0, emptyAirCell());
+    w.putCell(0, 65, 0, emptyAirCell());
+    w.putCell(0, 66, 0, emptyAirCell());
+    const node = new Node(0, 65, 0, new Set(), 'ground');
+    expect(Collision.canStandAt(w, node)).toBe(true);
+  });
 });

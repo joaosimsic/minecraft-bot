@@ -91,6 +91,22 @@ export class NavigationController {
     const goal = snap.goal;
     const range = snap.range;
 
+    // #region agent log
+    debugLog(
+      'NavigationController.ts:walkTo:snapResult',
+      'goal snapped',
+      {
+        goalIn: { x: goalIn.x, y: goalIn.y, z: goalIn.z },
+        snappedGoal: { x: goal.x, y: goal.y, z: goal.z },
+        range,
+        rangeIn,
+        goalChanged:
+          goalIn.x !== goal.x || goalIn.y !== goal.y || goalIn.z !== goal.z,
+      },
+      'H2',
+    );
+    // #endregion
+
     if (this.bot.entity.position.distanceTo(goal) <= range) return ok(true);
 
     this.recovery.resetForNewGoal();
@@ -273,6 +289,43 @@ export class NavigationController {
           },
         },
         'H9',
+      );
+      // #endregion
+
+      // #region agent log
+      const _fwdProbe: Record<string, unknown>[] = [];
+      const _goalDz = Math.sign(gz - startNode.z);
+      const _goalDx = Math.sign(gx - startNode.x);
+      for (let _step = 0; _step <= 15; _step++) {
+        const _sz = startNode.z + _step * (_goalDz || 1);
+        const _sx = startNode.x + _step * _goalDx;
+        for (let _dy = -2; _dy <= 2; _dy++) {
+          const _sy = startNode.y + _dy;
+          const _c = this.world.cell(_sx, _sy, _sz);
+          const _n = Collision.destinationNode(
+            this.world,
+            _sx,
+            _sy,
+            _sz,
+            new Set(),
+          );
+          const _cs = Collision.canStandAt(this.world, _n);
+          _fwdProbe.push({
+            step: _step,
+            dx: _step * _goalDx,
+            dy: _dy,
+            dz: _step * (_goalDz || 1),
+            cell: _c,
+            canStand: _cs,
+            key: _n.key,
+          });
+        }
+      }
+      debugLog(
+        'NavigationController.ts:walkTo:forwardTerrain',
+        'terrain profile toward goal',
+        { startKey: startNode.key, goalKey: goalNode.key, fwdProbe: _fwdProbe },
+        'H1',
       );
       // #endregion
 

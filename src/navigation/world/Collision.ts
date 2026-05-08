@@ -158,17 +158,21 @@ export class Collision {
     );
     if (!Collision.canStandAt(world, to)) return false;
 
-    const stepBlocked = Collision.bodyBlocked(
-      world,
-      nx,
-      from.y,
-      nz,
-      from.assumedOpenDoors,
-    );
-    if (stepBlocked) return false;
+    const jumpCeilingY = from.y + BETA_173.PLAYER_BODY_HEIGHT_BLOCKS;
+    if (
+      Collision.bodyBlocked(
+        world,
+        from.x,
+        jumpCeilingY,
+        from.z,
+        from.assumedOpenDoors,
+      )
+    )
+      return false;
 
-    const jumpHeadY = from.y + BETA_173.PLAYER_BODY_HEIGHT_BLOCKS;
-    if (Collision.bodyBlocked(world, nx, jumpHeadY, nz, from.assumedOpenDoors))
+    if (
+      Collision.bodyBlocked(world, nx, jumpCeilingY, nz, from.assumedOpenDoors)
+    )
       return false;
     return true;
   }

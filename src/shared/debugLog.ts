@@ -1,6 +1,6 @@
 const ENDPOINT =
   'http://127.0.0.1:7848/ingest/978eebf5-f58c-4f97-a648-f984488059ac';
-const SESSION = '2b7e2d';
+const SESSION = '68083a';
 
 export function debugLog(
   location: string,

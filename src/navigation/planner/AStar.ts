@@ -127,13 +127,66 @@ export class AStar {
     while (heap.size > 0) {
       if (expanded >= maxExpansions) {
         // #region agent log
-        debugLog('AStar.ts:budgetExhausted', 'budget hit', { expanded, bestPartialKey, bestPartialH, startKey: start.key, isNull: bestPartialKey === null, isStart: bestPartialKey === start.key }, 'H12');
+        const _terrainProbe: Record<string, unknown>[] = [];
+        for (let _dz = -2; _dz <= 5; _dz++) {
+          for (let _dy = -3; _dy <= 3; _dy++) {
+            const _px = start.x,
+              _py = start.y + _dy,
+              _pz = start.z + _dz;
+            const _cell = world.cell(_px, _py, _pz);
+            const _mc = world.footMovementClass(_px, _py, _pz);
+            const _n = Collision.destinationNode(
+              world,
+              _px,
+              _py,
+              _pz,
+              new Set(),
+            );
+            const _cs = Collision.canStandAt(world, _n);
+            _terrainProbe.push({
+              dx: 0,
+              dy: _dy,
+              dz: _dz,
+              cell: _cell,
+              mc: _mc,
+              key: _n.key,
+              canStand: _cs,
+            });
+          }
+        }
+        const _startH = Heuristic.estimate(start, goal);
+        debugLog(
+          'AStar.ts:budgetExhausted',
+          'budget hit',
+          {
+            expanded,
+            bestPartialKey,
+            bestPartialH,
+            startKey: start.key,
+            goalKey: goal.key,
+            startH: _startH,
+            isNull: bestPartialKey === null,
+            isStart: bestPartialKey === start.key,
+            terrainProbe: _terrainProbe,
+          },
+          'H12',
+        );
         // #endregion
         if (bestPartialKey !== null && bestPartialKey !== start.key) {
           const partialG = gScore.get(bestPartialKey) ?? 0;
           const pathOp = AStar.reconstruct(cameFrom, start.key, bestPartialKey);
           // #region agent log
-          debugLog('AStar.ts:partialExtract', 'reconstruct result', { bestPartialKey, partialG, err: pathOp[0]?.message ?? null, pathLen: pathOp[1]?.length ?? -1 }, 'H12');
+          debugLog(
+            'AStar.ts:partialExtract',
+            'reconstruct result',
+            {
+              bestPartialKey,
+              partialG,
+              err: pathOp[0]?.message ?? null,
+              pathLen: pathOp[1]?.length ?? -1,
+            },
+            'H12',
+          );
           // #endregion
           if (pathOp[0] === null && pathOp[1] !== null) {
             telemetry.searchEnd({
@@ -214,7 +267,12 @@ export class AStar {
           cost: currentG,
           durationTicks: durationTicks(),
         });
-        return ok({ path, nodesExpanded: expanded, cost: currentG, partial: false });
+        return ok({
+          path,
+          nodesExpanded: expanded,
+          cost: currentG,
+          partial: false,
+        });
       }
 
       const candidateHook = (

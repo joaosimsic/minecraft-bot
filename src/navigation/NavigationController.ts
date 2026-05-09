@@ -122,16 +122,27 @@ export class NavigationController {
   private readonly onPhysicsProbe = (): void => this.probeStuck();
 
   public async walkTo(goalIn: Vec3, rangeIn: number): AsyncResult<boolean> {
-    const snap = this.snapGoal(goalIn, rangeIn);
+    this.runSeq += 1;
+    const runId = `nav-${Date.now()}-${this.runSeq}`;
+
+    let snap = this.snapGoal(goalIn, rangeIn);
     if (snap === null) {
-      debugLog(
-        'NavigationController.ts:walkTo:snapNull',
-        'goal_unsnappable',
-        { goalIn: { x: goalIn.x, y: goalIn.y, z: goalIn.z }, rangeIn },
-        'H1',
-      );
-      this.log.warn('plan_failed', 'goal_unsnappable');
-      return ok(false);
+      const refreshErr = await this.refreshChunksAroundGoal();
+      if (refreshErr === null) {
+        snap = this.snapGoal(goalIn, rangeIn);
+      }
+
+      if (snap === null) {
+        debugLog(
+          'NavigationController.ts:walkTo:snapNull',
+          'goal_unsnappable',
+          { goalIn: { x: goalIn.x, y: goalIn.y, z: goalIn.z }, rangeIn },
+          'H1',
+        );
+        this.log.warn('plan_failed', 'goal_unsnappable');
+        await NavigationController.dumpWorldOnFailure(this.world, runId);
+        return fail(new Error('goal_unsnappable'));
+      }
     }
     const goal = snap.goal;
     const range = snap.range;
@@ -189,6 +200,27 @@ export class NavigationController {
         Math.floor(bp.z),
         new Set(),
       );
+
+      if (bp.y % 1 >= 0.5) {
+        const floorCell = this.world.cell(
+          Math.floor(bp.x),
+          Math.floor(bp.y),
+          Math.floor(bp.z),
+        );
+        if (floorCell.blocksBody) {
+          const ceilNode = Collision.destinationNode(
+            this.world,
+            Math.floor(bp.x),
+            Math.ceil(bp.y),
+            Math.floor(bp.z),
+            new Set(),
+          );
+          if (Collision.canStandAt(this.world, ceilNode)) {
+            startNode = ceilNode;
+          }
+        }
+      }
+
       if (!Collision.canStandAt(this.world, startNode)) {
         const _bx = Math.floor(bp.x),
           _by = Math.floor(bp.y),
@@ -357,12 +389,63 @@ export class NavigationController {
         { startKey: startNode.key, goalKey: goalNode.key, fwdProbe: _fwdProbe },
         'H1',
       );
-      this.runSeq += 1;
-      const runId = `nav-${Date.now()}-${this.runSeq}`;
+
+      const _rawProbe: Record<string, unknown>[] = [];
+      const _dxSign = gx === startNode.x ? 0 : Math.sign(gx - startNode.x);
+      const _dzSign = gz === startNode.z ? 0 : Math.sign(gz - startNode.z);
+      const _stepCount = Math.max(
+        Math.abs(gx - startNode.x),
+        Math.abs(gz - startNode.z),
+      );
+      for (let _i = 0; _i <= _stepCount; _i += 1) {
+        const _px = startNode.x + _i * _dxSign;
+        const _pz = startNode.z + _i * _dzSign;
+        for (let _dy = -1; _dy <= 2; _dy += 1) {
+          const _py = startNode.y + _dy;
+          const _b = this.bot.blockAt(new Vec3(_px, _py, _pz));
+          _rawProbe.push({
+            x: _px,
+            y: _py,
+            z: _pz,
+            name: _b === null ? null : _b.name,
+            type: _b === null ? null : _b.type,
+            stateId: _b === null ? null : _b.stateId,
+            boundingBox: _b === null ? null : _b.boundingBox,
+          });
+        }
+      }
+      for (let _dx = -1; _dx <= 1; _dx += 1) {
+        for (let _dy = -1; _dy <= 2; _dy += 1) {
+          for (let _dz = -1; _dz <= 1; _dz += 1) {
+            const _b = this.bot.blockAt(new Vec3(gx + _dx, gy + _dy, gz + _dz));
+            _rawProbe.push({
+              x: gx + _dx,
+              y: gy + _dy,
+              z: gz + _dz,
+              name: _b === null ? null : _b.name,
+              type: _b === null ? null : _b.type,
+              stateId: _b === null ? null : _b.stateId,
+              boundingBox: _b === null ? null : _b.boundingBox,
+              nearGoal: true,
+            });
+          }
+        }
+      }
+      this.log.info(
+        'block_probe',
+        `start=(${startNode.x},${startNode.y},${startNode.z}) goal=(${gx},${gy},${gz}) cells=${_rawProbe.length}`,
+      );
+      this.log.event('block_probe', {
+        startKey: startNode.key,
+        goalKey: goalNode.key,
+        probe: _rawProbe,
+      });
+
       this.world.setGoal({ x: gx, y: gy, z: gz });
       const expandOpts = config.env.NAV_DIAGONAL
         ? { diagonal: true }
         : undefined;
+      this.world.beginSearch();
       const planOp = await AStar.search(
         this.world,
         startNode,
@@ -383,6 +466,7 @@ export class NavigationController {
               : config.env.NAV_YIELD_EVERY,
         },
       );
+      this.world.endSearch();
       if (planOp[0] !== null) {
         await NavigationController.dumpWorldOnFailure(this.world, runId);
         debugLog(
@@ -529,6 +613,15 @@ export class NavigationController {
     }
 
     return ok(false);
+  }
+
+  private async refreshChunksAroundGoal(): Promise<Error | null> {
+    await new Promise<void>((resolve): void => {
+      setTimeout((): void => {
+        resolve();
+      }, 250);
+    });
+    return null;
   }
 
   private snapGoal(

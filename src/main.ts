@@ -97,17 +97,43 @@ class BotRunner {
     return this.proxy.start();
   }
 
+  private patchBlockRegistry(bot: mineflayer.Bot): void {
+    bot.once('inject_allowed', (): void => {
+      const problematicBlocks = new Set([
+        'cobblestone_stairs',
+        'oak_stairs',
+        'stone_stairs',
+        'stone_slab',
+      ]);
+
+      for (const blockName of problematicBlocks) {
+        const block = bot.registry.blocksByName[blockName];
+        if (block) {
+          block.boundingBox = 'block';
+        }
+      }
+
+      const redstoneWire = bot.registry.blocksByName['redstone_wire'];
+      if (redstoneWire) {
+        redstoneWire.boundingBox = 'empty';
+      }
+    });
+  }
+
   private createBot(username: string): mineflayer.Bot {
     const { HOST, PORT, VERSION, CLIENT_VERSION, AUTH } = config.env;
     const useProxy = this.proxy !== null;
 
-    return mineflayer.createBot({
+    const bot = mineflayer.createBot({
       host: useProxy ? '127.0.0.1' : HOST,
       port: useProxy ? this.viaproxyListenPort : PORT,
       version: useProxy ? CLIENT_VERSION : VERSION,
       username,
       auth: AUTH,
     });
+
+    this.patchBlockRegistry(bot);
+    return bot;
   }
 
   private shutdown(): void {

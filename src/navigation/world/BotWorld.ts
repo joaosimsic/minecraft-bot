@@ -16,6 +16,7 @@ type BlockProps = { half?: string; open?: string | boolean };
 
 const DOOR_RE = /door/i;
 const STAIR_RE = /stairs?/i;
+const SLAB_RE = /slab/i;
 
 export interface CellDumpData {
   name: string;
@@ -59,12 +60,30 @@ export class BotWorld implements World {
   private readonly closedDoorCache = new Map<string, boolean>();
   private readonly hostileCache = new Map<string, boolean>();
   private lastGoal?: { x: number; y: number; z: number };
+  private searchInProgress = 0;
+  private dirtyDuringSearch = false;
+
+  public beginSearch(): void {
+    this.searchInProgress += 1;
+  }
+
+  public endSearch(): void {
+    if (this.searchInProgress > 0) this.searchInProgress -= 1;
+    if (this.searchInProgress > 0) return;
+    if (!this.dirtyDuringSearch) return;
+    this.clearSpatialCaches();
+    this.dirtyDuringSearch = false;
+  }
 
   public constructor(
     private readonly bot: Bot,
     private readonly envOpts?: BotWorldEnvOpts,
   ) {
     const bump = (): void => {
+      if (this.searchInProgress > 0) {
+        this.dirtyDuringSearch = true;
+        return;
+      }
       this.clearSpatialCaches();
     };
 
@@ -428,7 +447,6 @@ export class BotWorld implements World {
 
   private static classifyBlock(block: Block | null): WorldCell {
     if (block === null) return emptyAirCell();
-    if (block.boundingBox === 'empty') return emptyAirCell();
     if (DOOR_RE.test(block.name)) {
       const p = BotWorld.blockProps(block);
       const open = p?.open === 'true' || p?.open === true;
@@ -438,6 +456,10 @@ export class BotWorld implements World {
     if (STAIR_RE.test(block.name)) {
       return solidGroundCell();
     }
+    if (SLAB_RE.test(block.name)) {
+      return { blocksBody: false, topSupportStand: true };
+    }
+    if (block.boundingBox === 'empty') return emptyAirCell();
     if (block.diggable === false && block.name !== 'air') {
       return solidGroundCell();
     }

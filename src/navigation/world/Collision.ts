@@ -254,8 +254,13 @@ export class Collision {
     z: number,
     assumed: ReadonlySet<string>,
   ): boolean {
-    if (!world.closedDoorAt(x, y, z)) return false;
-    return assumed.has(doorSlotKey(x, y, z));
+    if (world.closedDoorAt(x, y, z)) {
+      return assumed.has(doorSlotKey(x, y, z));
+    }
+    if (world.closedDoorAt(x, y - 1, z)) {
+      return assumed.has(doorSlotKey(x, y - 1, z));
+    }
+    return false;
   }
 
   private static bodyBlocked(
